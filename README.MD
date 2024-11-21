@@ -2,7 +2,7 @@ Autonomic is a modular operations management framework for building automated ma
 
 Created out of curiosity and for personal use as part of ongoing transition to Rust for implementing infrastructure software.
 
-## 🚧Important🚧:
+## 🚧Important🚧
 * No stable data model. It is subject to major changes without prior notice.
 * Many components are not public yet or partially public.
 
