@@ -1,12 +1,12 @@
 use std::sync::Arc;
-
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::SeqCst;
 use tokio::sync::Notify;
 
 use async_trait::async_trait;
 
 use crate::core::effector::Effector;
 use crate::core::operation::OperationParameters;
-use crate::core::sync::AtomicGuard;
 use crate::core::traits::IntoSensor;
 use crate::{trace_error, trace_info};
 
@@ -32,7 +32,7 @@ where
 struct SensorData {
     condition: Box<dyn ActivationCondition>,
     deactivate: Notify,
-    guard: AtomicGuard,
+    guard: AtomicBool,
 }
 
 /// Sensor is an observer object that observes a condition, when met, it calls activation on effector.
@@ -63,7 +63,7 @@ impl Sensor {
             data: Arc::new(SensorData {
                 condition: Box::new(condition),
                 deactivate: Notify::new(),
-                guard: AtomicGuard::default(),
+                guard: AtomicBool::default(), // false
             }),
         }
     }
@@ -78,7 +78,7 @@ impl Sensor {
     /// - `effector`: a counted reference to the effector that controls the operation.
     pub(super) fn activate(&self, effector: Arc<Effector>) {
         // Activate guard to prevent new activation
-        self.data.guard.activate();
+        self.data.guard.store(true, SeqCst);
         let op_id: &str = effector.id();
         trace_info!(source = op_id, message = "Sensor Activated");
         // Cloned reference for the execution block
@@ -89,7 +89,7 @@ impl Sensor {
                 // Deactivation requested
                 _ = data_ref.deactivate.notified() => {
                     // Deactivate guard
-                    data_ref.guard.deactivate();
+                    data_ref.guard.store(false, SeqCst);
                     trace_info!(
                         source = op_id,
                         message = "Sensor Deactivated"
@@ -103,7 +103,7 @@ impl Sensor {
                             // Deactivating sensor with notify might not be fast enough to avoid new activation
                             // So, we deactivate the guard directly and break the loop immediately
                             // No new activations should be allowed after this point
-                            data_ref.guard.deactivate();
+                            data_ref.guard.store(false, SeqCst);
                             trace_error!(source = op_id, message = "Sensor Deactivated");
                             break;
                         }
@@ -126,6 +126,6 @@ impl Sensor {
     /// Checks if the sensor is currently active.
     #[inline]
     pub(super) fn is_active(&self) -> bool {
-        self.data.guard.is_active()
+        self.data.guard.load(SeqCst)
     }
 }

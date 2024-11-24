@@ -8,7 +8,6 @@ pub mod operation;
 pub mod sensor;
 pub mod serde;
 pub mod service;
-pub mod sync;
 pub mod traits;
 
 #[macro_use]

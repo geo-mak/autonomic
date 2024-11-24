@@ -1,11 +1,11 @@
 use std::sync::Arc;
-
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering::SeqCst;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinError;
 
 use crate::core::operation::{OpState, Operation, OperationParameters, OperationResult};
-use crate::core::sync::AtomicState;
 use crate::{trace_error, trace_info, trace_warn};
 
 struct EffectorData {
@@ -15,7 +15,7 @@ struct EffectorData {
     // 0: Inactive
     // 1: Active
     // 2: Locked
-    state: AtomicState,
+    state: AtomicU8,
 }
 
 /// Effector manages the activation and the lifecycle of an operation.
@@ -31,7 +31,7 @@ impl Effector {
             data: Arc::new(EffectorData {
                 operation: Box::new(operation),
                 abort_tx: Notify::new(),
-                state: AtomicState::default(), // Default state is 0 (inactive)
+                state: AtomicU8::new(0), // Default state is 0 (inactive)
             }),
         }
     }
@@ -51,13 +51,13 @@ impl Effector {
     /// Checks if operation is currently active.
     #[inline(always)]
     pub(super) fn is_active(&self) -> bool {
-        self.data.state.is(1)
+        self.data.state.load(SeqCst) == 1
     }
 
     /// Checks if the operation is currently locked.
     #[inline(always)]
     pub(super) fn is_locked(&self) -> bool {
-        self.data.state.is(2)
+        self.data.state.load(SeqCst) == 2
     }
 
     /// Locks the operation.
@@ -65,7 +65,7 @@ impl Effector {
     /// > Operation is allowed to complete, but no new activation will be allowed.
     #[inline]
     pub(super) fn lock(&self) {
-        self.data.state.store(2);
+        self.data.state.store( 2, SeqCst);
         trace_warn!(
             source = self.data.operation.id(),
             message = "Operation locked"
@@ -77,8 +77,8 @@ impl Effector {
     pub(super) fn unlock(&self) {
         // > **Safety**: Unlocking is only allowed if the operation is currently locked.
         // > Changing the state to 0 (active) without locking is not allowed.
-        if self.data.state.is(2) {
-            self.data.state.store(0);
+        if self.data.state.load(SeqCst) == 2 {
+            self.data.state.store( 0, SeqCst);
             trace_info!(
                 source = self.data.operation.id(),
                 message = "Operation unlocked"
@@ -99,7 +99,7 @@ impl Effector {
     /// > - `Arc` is used for easy interfacing with sensor.
     pub(super) fn activate(&self, parameters: Option<Arc<dyn OperationParameters>>) {
         // Update state to 1 (active) to prevent new activation
-        self.data.state.store(1);
+        self.data.state.store(1, SeqCst);
         let op_id: &str = self.data.operation.id();
         trace_info!(source = op_id, message = "Active");
         // Cloned reference for the execution block
@@ -112,7 +112,7 @@ impl Effector {
                 // Abort requested
                 _ = data_ref.abort_tx.notified() => {
                     // Update state to 0 (inactive)
-                    data_ref.state.store(0);
+                    data_ref.state.store(0, SeqCst);
                     trace_info!(source = op_id, message = "Aborted");
                     return;
                 },
@@ -140,7 +140,7 @@ impl Effector {
                     // Locking result
                     OperationResult::Lock(_) => {
                         // Update state to 2 (locked)
-                        data_ref.state.store(2);
+                        data_ref.state.store(2, SeqCst);
                         trace_warn!(source = op_id, message = "Completed: Lock");
                         return; // Exit here to keep the lock
                     }
@@ -148,13 +148,13 @@ impl Effector {
                 // Unexpected error
                 Err(_) => {
                     // Update state to 2 (locked)
-                    data_ref.state.store(2);
+                    data_ref.state.store(2, SeqCst);
                     trace_error!(source = op_id, message = "Completed: Panicked");
                     return; // Exit here to keep the lock
                 }
             };
             // Operation completed, deactivate guard
-            data_ref.state.store(0);
+            data_ref.state.store(0, SeqCst);
         });
     }
 
@@ -178,7 +178,7 @@ impl Effector {
         parameters: Option<Box<dyn OperationParameters>>,
     ) -> Receiver<OpState> {
         // Update state to 1 (active) to prevent new activation
-        self.data.state.store(1);
+        self.data.state.store(1, SeqCst);
         let op_id: &str = self.data.operation.id();
         trace_info!(source = op_id, message = "Active");
         // Send active state
@@ -193,7 +193,7 @@ impl Effector {
                     // Abort requested
                 _ = data_ref.abort_tx.notified() => {
                    // Update state to 0 (inactive)
-                    data_ref.state.store(0);
+                    data_ref.state.store(0, SeqCst);
                     trace_info!(source = op_id, message = "Aborted");
                     let _ = tx.send(OpState::Aborted);
                     return;
@@ -234,7 +234,7 @@ impl Effector {
                         // Locking result
                         OperationResult::Lock(msg) => {
                             // Update state to 2 (locked)
-                            data_ref.state.store(2);
+                            data_ref.state.store(2, SeqCst);
                             trace_warn!(source = op_id, message = "Completed: Lock");
                             // Dispatch final state
                             let _ = tx.send(OpState::Locked(Some(msg)));
@@ -245,7 +245,7 @@ impl Effector {
                 // Unexpected error
                 Err(join_err) => {
                     // Update state to 2 (locked)
-                    data_ref.state.store(2);
+                    data_ref.state.store(2, SeqCst);
                     trace_error!(source = op_id, message = "Completed: Panicked");
                     // Dispatch final state
                     let _ = tx.send(OpState::Panicked(join_err.to_string()));
@@ -255,7 +255,7 @@ impl Effector {
             // Dispatch final state
             let _ = tx.send(state);
             // Operation completed, deactivate guard
-            data_ref.state.store(0);
+            data_ref.state.store(0, SeqCst);
         });
         rx
     }
