@@ -223,15 +223,6 @@ where
     {
         tokio::spawn(async move {
             loop {
-                if data.guard.load(Ordering::Acquire) {
-                    // This task is the last waiter to acquire the lock after the guard has been activated
-                    let mut buffer = data.buffer.lock().await;
-                    // TODO: No strategy for dealing with the current data in the buffer.
-                    // garbage collection
-                    buffer.clear();
-                    buffer.shrink_to(0);
-                    return; // Stop writing
-                }
                 // Mutex guard acquired here
                 let mut buffer = tokio::select! {
                     _ = tokio::time::sleep(write_interval) =>
@@ -247,27 +238,30 @@ where
                         data.buffer.lock().await
                     }
                 };
-                match F::write(&buffer, &directory).await {
-                    Ok(_) => {
-                        buffer.clear(); // Events are written, clear the buffer
-                    }
-                    // TODO: No strategy for handling errors when writing.
-                    Err(err) => {
-                        /*
-                        Since there is no strategy for handling errors when writing,
-                        we just stop writing and prevent further recordings, but
-                        tasks that are currently waiting to acquire the lock have passed the guard check already,
-                        so they will write the buffer.
-                        We allow one more iteration, to make sure this task is the last one acquiring the lock.
-                        */
+
+                // TODO: No strategy for handling errors when writing.
+                if let Err(e) = F::write(&buffer, &directory).await {
+                        // Activate the guard to prevent new recordings
                         data.guard.store(true, Ordering::Release);
+                        // **Note**: Waiters before the activation of the guard,
+                        // will be able to write to the buffer when current lock is released.
+                        drop(buffer); // <-- Release the current lock or it will deadlock
+                        // TODO: No strategy for dealing with current data in the buffer.
+                        // Acquire the lock again as the last waiter this time
+                        let mut buffer = data.buffer.lock().await;
+                        // Do some garbage collection
+                        buffer.clear();
+                        buffer.shrink_to(0);
                         // Propagate the event for other subscribers
                         trace_error!(
                             source = "BufferedFileStore",
-                            message = format!("Stopped: {}", err)
+                            message = format!("Stopped: {}", e)
                         );
-                    }
-                };
+                        return; // Exit the task
+                    };
+
+                // Clear the buffer after successful write
+                buffer.clear();
             }
         });
     }
