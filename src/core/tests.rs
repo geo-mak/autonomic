@@ -47,10 +47,10 @@ mod tests_serde_core_types {
         ];
 
         for stage in stages {
-            let serialized = serde_json::to_string(&stage).expect("Failed to serialize OpState");
+            let serialized = to_string(&stage).expect("Failed to serialize OpState");
 
             let deserialized: OpState =
-                serde_json::from_str(&serialized).expect("Failed to deserialize OpState");
+                from_str(&serialized).expect("Failed to deserialize OpState");
 
             assert_eq!(stage, deserialized);
         }

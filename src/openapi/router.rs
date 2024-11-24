@@ -581,10 +581,8 @@ mod tests {
         let inactive_operation =
             TestOperation::ok("inactive_operation", "this is test operation", None);
 
-        // Operation will move to controller, clone id
         let active_op_id = active_operation.id();
 
-        // Add operations to the controller and activate them
         controller.submit(active_operation, None);
         controller.submit(inactive_operation, None);
 

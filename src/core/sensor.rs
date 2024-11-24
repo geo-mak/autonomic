@@ -41,7 +41,7 @@ struct SensorData {
 /// When activated, the sensor starts observing its condition in an infinite loop,
 /// activating the effector every time the condition is met.
 ///
-/// Sensor can be deactivated anytime using its deactivation handle.
+/// Sensor can be deactivated anytime using the deactivation method.
 ///
 /// > **Notes**:
 /// > - Sensor itself is not associated with any effector. Effector is any instance provided as parameter by the container.

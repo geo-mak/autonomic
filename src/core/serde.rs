@@ -85,10 +85,7 @@ impl DeserializeRegistry {
 /// Unique safe pointer with metadata about the heap-allocated data it owns.
 /// Designed as a wrapper around any serializable type that can be serialized and deserialized.
 ///
-/// > **Important Notes**:
-/// > - Using this type is relatively an expensive operation, because it might need to register concrete type in global registry at runtime.
-/// > - Always consider using a concrete type where possible.
-/// > - Base size: `40 bytes` on `64 bit` systems.
+/// Base size: `40 bytes` on `64 bit` systems.
 pub struct AnySerializable {
     type_name: Cow<'static, str>,
     data: Box<dyn GenericSerializable>,

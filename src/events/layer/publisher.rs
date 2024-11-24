@@ -48,7 +48,6 @@ where
     /// -`buffer`: The size of the channel's buffer to retain unreceived events.
     ///
     /// > **Note**: Buffer size must be greater than `16`. If value is less than `16`, it will be set to `16`.
-    #[must_use]
     pub fn new(buffer: usize) -> Self {
         let (tx, _) = broadcast::channel::<R::Schema>(buffer.max(16));
         Self {
@@ -62,7 +61,6 @@ where
     /// Subscribers can be created from the channel using `subscribe()` method.
     ///
     /// > Note: Recording and publishing events will be **suspended**, when there are **no active subscribers** to receive events.
-    #[must_use]
     pub fn channel(&self) -> EventChannel<R::Schema> {
         Arc::clone(&self.channel)
     }
