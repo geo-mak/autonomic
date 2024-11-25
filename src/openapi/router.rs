@@ -613,7 +613,7 @@ mod tests {
         // Activate the operation
         controller_ref.activate::<()>(&active_op_id, None).unwrap();
 
-        // Operation execution is delayed for 1 millis, so it should be still active when we check
+        // Operation execution is delayed for 10 millis, so it should be still active when we check
         tokio::time::sleep(Duration::from_millis(1)).await;
         let response = router
             .oneshot(
@@ -636,8 +636,8 @@ mod tests {
         let result = serde_json::from_slice::<Vec<String>>(&body)
             .expect("Failed to deserialize Vec<String>");
 
-        // Compare the sorted vectors
-        assert!(result.contains(&active_op_id.to_string()));
+        // The first element must be the active operation
+        assert_eq!(result[0], active_op_id.to_string());
     }
 
     #[tokio::test]

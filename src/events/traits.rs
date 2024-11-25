@@ -22,12 +22,14 @@ pub trait EventRecorder {
     fn record(event: &Event) -> Option<Self::Schema>;
 }
 
-/// Trait representing event-file writer.
-/// Implementations shall efficiently write a slice (buffer) of some type to file.
+/// Trait representing a file writer.
 pub trait FileWriter {
-    type BufferType;
+    /// The source type that is written to the file.
+    type SourceType;
+    /// Writes the source to the file at the specified path.
+    /// Returns a future that resolves to the result of the write operation.
     fn write(
-        buffer: &[Self::BufferType],
+        source: &[Self::SourceType],
         file_path: &PathBuf,
     ) -> impl Future<Output = tokio::io::Result<()>> + Send;
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufWriter};
 use tokio::sync::{Mutex, Notify};
 
 use tracing::{Event, Subscriber};
@@ -29,7 +29,7 @@ impl FileExtension for CSVFormat {
 }
 
 impl FileWriter for CSVFormat {
-    type BufferType = DefaultEvent;
+    type SourceType = DefaultEvent;
 
     /// Writes the buffer to the file in CSV format.
     ///
@@ -37,26 +37,31 @@ impl FileWriter for CSVFormat {
     /// > It only returns an error when writing fails.
     ///
     /// # Parameters
-    /// - `buffer`: The buffer containing events to write.
+    /// - `source`: The source buffer containing events to write.
     /// - `file_path`: The path to the file to write the events. Extension is expected to be part of the file name.
     ///
     /// # Returns
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
-    async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
+    async fn write(source: &[Self::SourceType], file_path: &PathBuf) -> tokio::io::Result<()> {
         // Open the file for appending (or create it if it doesn't exist)
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(file_path)
             .await?;
+
+        // Buffered writer to avoid multiple write operations
+        let mut buffer = BufWriter::new(file);
+
         // Prepare CSV header if the file is new or empty
-        if file.metadata().await?.len() == 0 {
+        if buffer.get_ref().metadata().await?.len() == 0 {
             let header: &[u8; 38] = b"Level,Source,Message,Target,Timestamp\n";
-            file.write_all(header).await?;
+            buffer.write_all(header).await?;
         }
+
         // Convert each entry in the buffer to a CSV string
-        for entry in buffer {
+        for entry in source {
             let csv_row = format!(
                 "{},{},{},{},{}\n",
                 entry.level(),
@@ -66,9 +71,12 @@ impl FileWriter for CSVFormat {
                 entry.timestamp().to_rfc3339(),
             );
 
-            // Write the CSV row to the file
-            file.write_all(csv_row.as_bytes()).await?;
+            // Write the CSV row to the buffer
+            buffer.write_all(csv_row.as_bytes()).await?;
         }
+
+        // Write the entire buffer to file
+        buffer.flush().await?;
         Ok(())
     }
 }
@@ -85,7 +93,7 @@ impl FileExtension for JSONFormat {
 }
 
 impl FileWriter for JSONFormat {
-    type BufferType = DefaultEvent;
+    type SourceType = DefaultEvent;
 
     /// Writes the buffer to the file in JSON format.
     ///
@@ -93,53 +101,62 @@ impl FileWriter for JSONFormat {
     /// > It only returns an error when writing fails.
     ///
     /// # Parameters
-    /// - `buffer`: The buffer containing events to write.
+    /// - `source`: The source buffer containing events to write.
     /// - `file_path`: The path to the file to write the events. Extension is expected to be part of the file name.
     ///
     /// # Returns
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
-    async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
+    async fn write(source: &[Self::SourceType], file_path: &PathBuf) -> tokio::io::Result<()> {
         // Open/Create the file in read/write mode
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(file_path)
             .await?;
+
+        // Buffered writer to avoid multiple write operations
+        let mut buffer = BufWriter::new(file);
+
         // Check if the file is new or empty
-        if file.metadata().await?.len() == 0 {
+        if buffer.get_ref().metadata().await?.len() == 0 {
             // If the file is empty, write the opening bracket
-            file.write_all(b"[\n").await?;
+            buffer.write_all(b"[\n").await?;
         } else {
             // If not empty, we need to remove the last character if it's a closing bracket
             let mut buf: Vec<u8> = vec![0; 1]; // Buffer to read the last character
-            file.seek(tokio::io::SeekFrom::End(-1)).await?; // Move to the last character
-            file.read_exact(&mut buf).await?; // Read it
+            buffer.get_mut().seek(tokio::io::SeekFrom::End(-1)).await?; // Move to the last character
+            buffer.get_mut().read_exact(&mut buf).await?; // Read it
 
             // If the last character is "]", we need to remove it
             if buf[0] == b']' {
                 // Move the file cursor back one byte to overwrite it
-                file.seek(tokio::io::SeekFrom::End(-1)).await?;
-                file.write_all(b",").await?; // Write a comma
+                buffer.get_mut().seek(tokio::io::SeekFrom::End(-1)).await?;
+                buffer.write_all(b",").await?; // Write a comma
             }
         }
+
         // Write entry in the buffer
-        for (i, entry) in buffer.iter().enumerate() {
+        for (i, entry) in source.iter().enumerate() {
             // Serialize entry to bytes
             let entry_bytes: Vec<u8> = serde_json::to_vec_pretty(entry)
                 .map_err(|e| tokio::io::Error::new(tokio::io::ErrorKind::Other, e))?;
 
             // Write entry's bytes
-            file.write_all(&entry_bytes).await?;
+            buffer.write_all(&entry_bytes).await?;
 
             // Append a comma after each entry except the last one
-            if i < buffer.len() - 1 {
-                file.write_all(b",\n").await?;
+            if i < source.len() - 1 {
+                buffer.write_all(b",\n").await?;
             }
         }
+
         // Add the closing bracket
-        file.write_all(b"\n]").await?;
+        buffer.write_all(b"\n]").await?;
+
+        // Write the entire buffer to file
+        buffer.flush().await?;
         Ok(())
     }
 }
@@ -169,7 +186,7 @@ where
 {
     _subscriber: PhantomData<S>,
     _format: PhantomData<F>,
-    data: Arc<StoreData<F::BufferType>>,
+    data: Arc<StoreData<F::SourceType>>,
 }
 
 impl<S, F> BufferedFileStore<S, F>
@@ -191,7 +208,7 @@ where
         allocate: bool,
     ) -> Self
     where
-        <F as FileWriter>::BufferType: Send + 'static,
+        <F as FileWriter>::SourceType: Send + 'static,
     {
         // Shared data
         let data = Arc::new(StoreData {
@@ -204,11 +221,14 @@ where
             write_alert: Notify::new(),
             threshold,
         });
+
         // Add the file name to the directory
         directory.push("events");
         directory.set_extension(F::extension()); // Compute once
+
         // Start the writer task
         Self::write(directory, write_interval, data.clone());
+
         // The new instance
         Self {
             _subscriber: PhantomData,
@@ -217,9 +237,9 @@ where
         }
     }
 
-    fn write(directory: PathBuf, write_interval: Duration, data: Arc<StoreData<F::BufferType>>)
+    fn write(directory: PathBuf, write_interval: Duration, data: Arc<StoreData<F::SourceType>>)
     where
-        <F as FileWriter>::BufferType: Send + 'static,
+        <F as FileWriter>::SourceType: Send + 'static,
     {
         tokio::spawn(async move {
             loop {
@@ -270,13 +290,15 @@ where
 impl<S, F> Layer<S> for BufferedFileStore<S, F>
 where
     S: Subscriber,
-    F: FileExtension + FileWriter<BufferType = DefaultEvent> + 'static,
+    F: FileExtension + FileWriter<SourceType= DefaultEvent> + 'static,
 {
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
         // Active guard means no writing, so we skip recording to prevent memory overflow
         if self.data.guard.load(Ordering::Acquire) {
             return;
         }
+
+        // Record the event, if it's valid
         if let Some(schema) = DefaultRecorder::record(event) {
             let data_ref = self.data.clone();
             tokio::spawn(async move {
@@ -502,9 +524,9 @@ mod tests {
     }
 
     impl FileWriter for MockFileWriter {
-        type BufferType = DefaultEvent;
+        type SourceType = DefaultEvent;
 
-        async fn write(_buffer: &[Self::BufferType], _file_path: &PathBuf) -> tokio::io::Result<()> {
+        async fn write(_buffer: &[Self::SourceType], _file_path: &PathBuf) -> tokio::io::Result<()> {
             Err(tokio::io::Error::new(tokio::io::ErrorKind::Other, "Simulated write error"))
         }
     }
