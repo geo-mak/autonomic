@@ -36,7 +36,7 @@ pub struct DeserializeRegistry;
 
 impl DeserializeRegistry {
     /// Registers a type to be deserializable.
-    /// This function adds the type's deserialization function to the `DESERIALIZE_TABLE`.
+    /// This function adds the type's deserialization function to the deserialization table.
     pub fn register<T>() -> &'static str
     where
         T: GenericSerializable + for<'de> Deserialize<'de>,

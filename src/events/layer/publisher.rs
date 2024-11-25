@@ -27,7 +27,7 @@ pub type EventChannel<T> = Arc<broadcast::Sender<T>>;
 ///
 /// # Generic Parameters
 /// - `S`: tracing subscriber that accepts `Layer<S>` types.
-/// - `EventRecorder`: The recorder type that filters and records events.
+/// - `R`: The recorder type that filters and records events.
 pub struct EventPublisher<S, R>
 where
     S: Subscriber,
@@ -62,7 +62,7 @@ where
     ///
     /// > Note: Recording and publishing events will be **suspended**, when there are **no active subscribers** to receive events.
     pub fn channel(&self) -> EventChannel<R::Schema> {
-        Arc::clone(&self.channel)
+        self.channel.clone()
     }
 }
 

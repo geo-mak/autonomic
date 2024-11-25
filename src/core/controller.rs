@@ -49,8 +49,8 @@ impl<'a> OperationController<'a> {
     ///
     /// > **Note**: If operation accepts a parameters-type that is carried by `AnySerializable`,
     /// > you need to register it, otherwise deserialization will fail.
-    /// > Therefore, consider using `submit_register` method instead.
-    /// > You can manually register the type using `TypeRegistry`, but this **must** be done before the start of the remote service.
+    /// > Therefore, consider using `submit_parameters` method instead.
+    /// > You can manually register the type using `DeserializeRegistry`, but this **must** be done before the start of the remote service.
     ///
     /// # Parameters
     /// - `operation`: The operation to submit.
@@ -104,6 +104,7 @@ impl<'a> OperationController<'a> {
     /// - `Ok(&OperationContainer)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
+    #[doc(hidden)]
     fn get(&self, id: &'a str) -> Result<&OperationContainer, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
@@ -128,6 +129,7 @@ impl<'a> OperationController<'a> {
     /// - `Ok(&mut OperationContainer)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
+    #[doc(hidden)]
     fn get_mut(&mut self, id: &'a str) -> Result<&mut OperationContainer, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");

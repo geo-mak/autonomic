@@ -18,9 +18,11 @@ use crate::core::traits::{Describe, Identity, IntoArc, IntoBox};
 /// > - Keep the operation simple and focused on its core functionality.
 ///   Narrow-focused implementation improves understanding its side effects, leading to more predictable
 ///   behavior, easier debugging, and cleaner interactions within the system.
-/// > - If you need conditional self-initiated activation, consider using the `Sensor` component.
-///   The `Sensor` provides a structured and managed approach to self-activation, making the process
+/// > - If you need conditional self-initiated activation, consider using the [`Sensor`] component.
+///   The [`Sensor`] provides a structured and managed approach to self-activation, making the process
 ///   predictable, consistent, and easier to maintain.
+///
+/// [`Sensor`]: crate::core::sensor::Sensor
 #[async_trait]
 pub trait Operation:
     Send + Sync + Identity<ID = &'static str> + Describe<Description = &'static str>
@@ -137,7 +139,6 @@ where
     }
 }
 
-// Implement the new trait for the generic type `T`
 impl<T> IntoAnySerializable for T
 where
     T: OperationParameters + Serialize + for<'de> Deserialize<'de> + Clone,

@@ -36,7 +36,7 @@ struct SensorData {
 }
 
 /// Sensor is an observer object that observes a condition, when met, it calls activation on effector.
-/// Sensor accepts any type that implements `ActivationCondition` trait as its activation condition.
+/// Sensor accepts any type that implements [`ActivationCondition`] trait as its activation condition.
 ///
 /// When activated, the sensor starts observing its condition in an infinite loop,
 /// activating the effector every time the condition is met.
