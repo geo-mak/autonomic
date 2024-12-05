@@ -1,6 +1,7 @@
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
+use std::sync::Arc;
+
 use tokio::sync::Notify;
 
 use async_trait::async_trait;

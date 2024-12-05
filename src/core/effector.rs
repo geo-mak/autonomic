@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::SeqCst;
+use std::sync::Arc;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinError;
@@ -65,7 +65,7 @@ impl Effector {
     /// > Operation is allowed to complete, but no new activation will be allowed.
     #[inline]
     pub(super) fn lock(&self) {
-        self.data.state.store( 2, SeqCst);
+        self.data.state.store(2, SeqCst);
         trace_warn!(
             source = self.data.operation.id(),
             message = "Operation locked"
@@ -78,7 +78,7 @@ impl Effector {
         // > **Safety**: Unlocking is only allowed if the operation is currently locked.
         // > Changing the state to 0 (active) without locking is not allowed.
         if self.data.state.load(SeqCst) == 2 {
-            self.data.state.store( 0, SeqCst);
+            self.data.state.store(0, SeqCst);
             trace_info!(
                 source = self.data.operation.id(),
                 message = "Operation unlocked"
