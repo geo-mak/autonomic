@@ -287,7 +287,7 @@ where
         directory.set_extension(F::extension()); // Compute once
 
         // Start the writer task
-        Self::write(directory, write_interval, data.clone());
+        Self::write(directory, write_interval, data);
 
         // Return the instance fused with the filter
         instance.with_filter(CallSiteFilter::new())
