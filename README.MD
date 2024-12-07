@@ -1,5 +1,7 @@
 Autonomic is a modular operations management framework for building automated management systems.
 
+Autonomic’s theoretical model is based on the principles of autonomic computing for clear skies, full of radiant stars—not for murky clouds hastily pieced together in quick-and-dirty languages.
+
 Created out of curiosity and for personal use as part of ongoing transition to Rust for implementing infrastructure software.
 
 ## 🚧Important🚧
