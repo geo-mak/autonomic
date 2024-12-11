@@ -614,7 +614,7 @@ mod tests {
             .with_body(body)
             .create();
 
-        let params = AnySerializable::new(TestRetry::new(3, 1000));
+        let params = AnySerializable::new_register(TestRetry::new(3, 1000));
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
@@ -688,7 +688,7 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let params = AnySerializable::new(TestRetry::new(3, 1000));
+        let params = AnySerializable::new_register(TestRetry::new(3, 1000));
 
         let mut stream = api_client
             .activate_stream(controller_id, operation_id, Some(&params))

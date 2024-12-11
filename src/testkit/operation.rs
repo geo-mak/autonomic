@@ -192,7 +192,7 @@ mod tests {
         init_tracing();
         let operation = TestOperation::err("test operation", "this is test operation", None);
 
-        let params = AnySerializable::new(TestRetry::new(3, 1000));
+        let params = AnySerializable::new_register(TestRetry::new(3, 1000));
 
         let result = operation.perform(Some(&params)).await;
 

@@ -42,8 +42,6 @@ impl DeserializeRegistry {
         T: GenericSerializable + for<'de> Deserialize<'de>,
     {
         let type_name = type_name::<T>();
-        let deserialize_fn: DeserializeFn =
-            |s| Box::new(serde_json::from_slice::<T>(s).expect("Failed to deserialize"));
 
         // Check if type is already registered to avoid locking
         {
@@ -54,6 +52,10 @@ impl DeserializeRegistry {
                 return type_name;
             }
         }
+
+        // Typed deserialization function
+        let deserialize_fn: DeserializeFn =
+            |s| Box::new(serde_json::from_slice::<T>(s).expect("Failed to deserialize"));
 
         // Lock access and register type
         {

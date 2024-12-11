@@ -123,7 +123,10 @@ mod tests_default_controller {
         let operation = TestOperation::err("test operation", "this is test operation", None);
         let id = operation.id();
         let mut controller = OperationController::new("test_controller");
-        controller.submit(operation, None);
+
+        // Submit operation and register parameters
+        controller.submit_parameters::<TestRetry>(operation, None);
+
         let params = AnySerializable::new(TestRetry::new(3, 1000));
         match controller.activate_stream(id, Some(params)) {
             Ok(mut watch_stream) => {

@@ -679,7 +679,7 @@ mod tests {
 
         controller.submit(operation, None);
 
-        let params = AnySerializable::new(TestRetry::new(3, 0));
+        let params = AnySerializable::new_register(TestRetry::new(3, 0));
 
         let params_json = serde_json::to_string(&Some(params)).unwrap();
 
@@ -768,7 +768,7 @@ mod tests {
 
         controller.submit(operation, None);
 
-        let params = AnySerializable::new(TestRetry::new(3, 0));
+        let params = AnySerializable::new_register(TestRetry::new(3, 0));
 
         let params_json = serde_json::to_string(&Some(params)).unwrap();
 
