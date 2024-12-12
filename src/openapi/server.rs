@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
@@ -6,9 +7,6 @@ use axum::Router;
 use tokio::sync::Notify;
 
 use crate::{trace_error, trace_trace};
-
-#[cfg(feature = "openapi-server-tls")]
-use std::path::PathBuf;
 
 #[cfg(feature = "openapi-server-tls")]
 use axum_server::tls_rustls::RustlsConfig;
@@ -113,15 +111,15 @@ impl OpenAPIServer {
         &self,
         address: SocketAddr,
         router: Router,
-        cert_path: &str,
-        key_path: &str,
+        cert_path: impl AsRef<Path>,
+        key_path: impl AsRef<Path>,
     ) {
         trace_trace!(
             source = "OpenAPIServer",
             message = "Starting OpenAPI TLS service..."
         );
         let io_result =
-            RustlsConfig::from_pem_file(PathBuf::from(cert_path), PathBuf::from(key_path)).await;
+            RustlsConfig::from_pem_file(cert_path, key_path).await;
 
         match io_result {
             Ok(config) => {
@@ -232,7 +230,7 @@ mod tests {
         // Start the TLS server in a separate task
         tokio::spawn(async move {
             cloned_service
-                .serve_tls(addr, router, &cert_path, &key_path)
+                .serve_tls(addr, router, cert_path, key_path)
                 .await;
         });
 
