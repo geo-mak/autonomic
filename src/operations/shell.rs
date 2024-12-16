@@ -45,6 +45,7 @@ impl ShellOperation {
         ShellOperation { id, description }
     }
 
+    #[inline]
     async fn execute_command(program: &str, args: &str) -> Result<Output, std::io::Error> {
         if args.is_empty() {
             Command::new(program).output().await
@@ -56,16 +57,17 @@ impl ShellOperation {
     async fn run(program: &str, args: &str) -> OperationResult {
         match Self::execute_command(program, args).await {
             Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                if output.status.success() {
-                    if stdout.is_empty() {
-                        OperationResult::Ok
-                    } else {
+                match output.status.success() {
+                    true if output.stdout.is_empty() => OperationResult::Ok,
+                    true => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                         OperationResult::OkStr(Cow::Owned(stdout))
-                    }
-                } else {
-                    OperationResult::ErrStr(Cow::Owned(stderr))
+                    },
+                    false if output.stderr.is_empty() => OperationResult::Err,
+                    false => {
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        OperationResult::ErrStr(Cow::Owned(stderr))
+                    },
                 }
             }
             Err(err) => OperationResult::ErrStr(Cow::Owned(err.to_string())),
