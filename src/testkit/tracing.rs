@@ -5,7 +5,7 @@ use tracing_subscriber::{Layer, Registry};
 
 static INIT: Once = Once::new();
 
-/// Initializes global default data subscriber with level `INFO`.
+/// Initializes global default data subscriber with level `TRACE`.
 /// This function will only be executed once, even if it is called multiple times.
 pub fn init_tracing() {
     // Setting global default must be done only once, otherwise it will panic
