@@ -3,7 +3,7 @@ name = "autonomic"
 version = "0.1.0"
 edition = "2021"
 description = "Modular operations management framework"
-license = "MIT"
+license-file = "LICENSE"
 readme = "README.MD"
 repository = "https://github.com/geo-mak/autonomic"
 
@@ -13,16 +13,15 @@ harness = false
 required-features = ["tests"]
 
 [dev-dependencies]
+# Benchmarking
+criterion = "0.6.0"
+
 tracing-subscriber = {version = "0.3.18", features = ["env-filter"]}
 tower = "0.5.1"
 reqwest = {version = "0.12.9", features = ["json", "stream", "rustls-tls"]}
 mockito = "1.6.0"
 chrono = {version = "0.4.38", features = ["serde"]}
 csv = "1.3.1"
-
-# Benchmarking
-criterion = "0.5.1"
-gnuplot = "0.0.44"
 
 [dependencies]
 #============= Core Dependencies =============#
