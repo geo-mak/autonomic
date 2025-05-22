@@ -76,7 +76,6 @@ impl Effector {
     #[inline]
     pub(super) fn unlock(&self) {
         // > **Safety**: Unlocking is only allowed if the operation is currently locked.
-        // > Changing the state to 0 (active) without locking is not allowed.
         if self.data.state.load(SeqCst) == 2 {
             self.data.state.store(0, SeqCst);
             trace_info!(

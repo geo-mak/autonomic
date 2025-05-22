@@ -86,13 +86,8 @@ impl<'a> OperationController<'a> {
     ) where
         T: OperationParameters + GenericSerializable + for<'de> Deserialize<'de> + 'static,
     {
-        if self.containers.contains_key(operation.id()) {
-            panic!("Operation with ID={} already submitted", operation.id());
-        } else {
-            self.containers
-                .insert(operation.id(), OperationContainer::new(operation, sensor));
-            DeserializeRegistry::register::<T>();
-        }
+        self.submit(operation, sensor);
+        DeserializeRegistry::register::<T>();
     }
 
     /// Retrieves an immutable reference to an operation by its ID.
@@ -104,7 +99,6 @@ impl<'a> OperationController<'a> {
     /// - `Ok(&OperationContainer)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    #[doc(hidden)]
     fn get(&self, id: &'a str) -> Result<&OperationContainer, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
@@ -129,7 +123,6 @@ impl<'a> OperationController<'a> {
     /// - `Ok(&mut OperationContainer)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    #[doc(hidden)]
     fn get_mut(&mut self, id: &'a str) -> Result<&mut OperationContainer, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
