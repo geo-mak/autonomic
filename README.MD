@@ -1,3 +1,5 @@
+## Autonomic
+[![CI](https://github.com/geo-mak/autonomic/actions/workflows/ci.yml/badge.svg)](https://github.com/geo-mak/autonomic/actions/workflows/ci.yml)
 A general purpose infrastructure control plane.
 
 Created out of curiosity and for personal use as part of ongoing transition to Rust for implementing infrastructure <br>
