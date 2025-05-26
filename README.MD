@@ -28,10 +28,10 @@ The core module has the following main components:
 that encapsulate metadata and execution logic.<br>
 Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can be activated with **different values** each time.<br>
 It is up to the operation to decide how to handle the parameters, which can be **ignored** or **rejected** with an <br>
-error message.<br>
+error message.<br><br>
 
 * Controller: An API that manages access to operations on its node. It acts as a registry and namespace for a <br>
-set of operations.<br> When an operation is submitted to the controller, it is assigned a container instance.
+set of operations.<br> When an operation is submitted to the controller, it is assigned a container instance.<br><br>
 
 * Container: Encapsulates the operation and controls its associated components.<br>
 Containers are private and managed internally by the system.<br><br>
@@ -41,7 +41,7 @@ activation and state management of operations. Effectors are private and managed
 
 * Sensor: An observer that encapsulates an activation condition.<br>
 Activation conditions are types that determine when an operation should be activated, and they are defined by <br>
-implementing the `ActivationCondition` trait, which allow unconstrained definition of conditions.<br>
+implementing the `ActivationCondition` trait, which allow unconstrained definition of conditions.<br><br>
 
 * Service: traits that define the control APIs (syscalls) of various components.<br><br>
 
@@ -55,7 +55,7 @@ implementing the `ActivationCondition` trait, which allow unconstrained definiti
 The current optional models are:
 
 * Service: Concrete implementations of services and other components.<br>
-Meanwhile, I have implemented an OpenAPI service with router, server with TLS support** and client <br>
+Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client <br>
 components, which was originally intended for testing since it is the easiest to change.<br>
 The gRPC service implementation is considered, but it is not a priority.<br><br>
 
