@@ -26,8 +26,7 @@ The core module has the following main components:
 
 * Operation: Operations are the core abstractions that define **concurrent** and **independent** **execution contexts** <br> 
 that encapsulate metadata and execution logic.<br>
-Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can <br>
-be activated with **different values** each time.<br>
+Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can be activated with **different values** each time.<br>
 It is up to the operation to decide how to handle the parameters, which can be **ignored** or **rejected** with an <br>
 error message.<br>
 
