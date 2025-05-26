@@ -146,25 +146,17 @@ mod tests_default_controller {
     #[tokio::test]
     async fn test_set_sensor() {
         init_tracing();
-        let op = TestOperation::ok("test operation", "this is test operation", None);
+        let op = TestOperation::ok("test operation", "test operation", None);
         let op_id = op.id();
         let sensor = TestIntervalCondition::new(1, None).into_sensor();
         let mut controller = OperationController::new("test_controller");
         controller.submit(op, None);
-        // Sensor must be error, because it has not been set
-        // Event: ERROR, Sensor not set
+        // Not set
         assert!(controller.is_sensor_active(&op_id).is_err());
-        // Set sensor
-        // Event: Sensor changed
-        controller.update_sensor(&op_id, Some(sensor)).unwrap();
-        // Sensor must be ok, because it has been set
-        assert!(controller.is_sensor_active(&op_id).is_ok());
-        // Set sensor to None
-        // Event: Sensor changed
-        controller.update_sensor(&op_id, None).unwrap();
-        // Sensor must be error, because it has been reset to None
-        // Event: ERROR, Sensor not set
-        assert!(controller.is_sensor_active(&op_id).is_err());
+        let op_2 = TestOperation::ok("test operation 2", "test operation", None);
+        let op_2_id = op_2.id();
+        controller.submit(op_2, Some(sensor));
+        assert!(!controller.is_sensor_active(&op_2_id).unwrap());
     }
 
     #[tokio::test]

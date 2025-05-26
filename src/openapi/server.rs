@@ -118,8 +118,7 @@ impl OpenAPIServer {
             source = "OpenAPIServer",
             message = "Starting OpenAPI TLS service..."
         );
-        let io_result =
-            RustlsConfig::from_pem_file(cert_path, key_path).await;
+        let io_result = RustlsConfig::from_pem_file(cert_path, key_path).await;
 
         match io_result {
             Ok(config) => {

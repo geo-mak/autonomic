@@ -11,8 +11,8 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 
-use crate::events::record::DefaultRecorder;
 use crate::events::layer::filter::CallSiteFilter;
+use crate::events::record::DefaultRecorder;
 use crate::events::traits::{EventRecorder, RecorderDirective};
 
 /// Reference to the events channel for creating receivers.

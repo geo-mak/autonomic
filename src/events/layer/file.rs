@@ -18,9 +18,7 @@ use tracing_subscriber::Layer;
 
 use crate::events::layer::filter::CallSiteFilter;
 use crate::events::record::{level_to_byte, DefaultDirective, DefaultEventVisitor};
-use crate::events::traits::{
-    EventRecorder, EventWriter, FileExtension, FileStoreFormat,
-};
+use crate::events::traits::{EventRecorder, EventWriter, FileExtension, FileStoreFormat};
 use crate::trace_error;
 
 /// File format for recording and writing events in CSV format.
@@ -57,7 +55,7 @@ impl EventRecorder for CSVFormat {
             event.metadata().target(),
             Utc::now().to_rfc3339(),
         )
-            .into_bytes() // Cheap conversion, only gets its Vec<u8> internal buffer
+        .into_bytes() // Cheap conversion, only gets its Vec<u8> internal buffer
     }
 }
 
@@ -244,7 +242,7 @@ where
 impl<S, F> BufferedFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Output= Vec<u8>, BufferType = u8> + 'static,
+    F: FileStoreFormat<Output = Vec<u8>, BufferType = u8> + 'static,
 {
     /// Creates new BufferedFileStore.
     ///
@@ -319,8 +317,8 @@ where
                     // Note: Waiters before the activation of the guard,
                     // will be able to write to the buffer when current lock is released.
                     drop(buffer); // <-- Release the current lock or it will deadlock
-                    // TODO: No strategy for dealing with current data in the buffer.
-                    // Acquire the lock again as the last waiter this time
+                                  // TODO: No strategy for dealing with current data in the buffer.
+                                  // Acquire the lock again as the last waiter this time
                     let mut buffer = data.buffer.lock().await;
                     // Do some garbage collection
                     buffer.clear();
@@ -348,7 +346,7 @@ where
             // but we let it write without rechecking anyway. Only new recordings will be skipped.
             buffer.append(&mut record);
             // This check must be done only after acquiring the lock and after pushing the event
-            if buffer.len() >= data_ref.capacity as usize{
+            if buffer.len() >= data_ref.capacity as usize {
                 // If the writer task is sleeping, it will wake up waiting for the lock to write the buffer,
                 // otherwise, it will write the buffer as soon as it acquires the lock.
                 data_ref.write_alert.notify_one();
@@ -360,7 +358,7 @@ where
 impl<S, F> Layer<S> for BufferedFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Output= Vec<u8>, BufferType = u8> + 'static,
+    F: FileStoreFormat<Output = Vec<u8>, BufferType = u8> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -400,7 +398,7 @@ mod tests {
         let store = BufferedFileStore::<Registry, CSVFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60), // We rely on the threshold for this test
-            201, // Writing must be triggered after the second event is recorded
+            201,                     // Writing must be triggered after the second event is recorded
             true,
         );
 
@@ -447,16 +445,12 @@ mod tests {
 
         // Validating records ignoring Target and Timestamp
         for record in records {
-
             let level = record.get(0).unwrap().trim();
             let source = record.get(1).unwrap().trim();
             let message = record.get(2).unwrap().trim();
 
             // Check if the entry matches expected values
-            if level == expected_info.0
-                && source == expected_info.1
-                && message == expected_info.2
-            {
+            if level == expected_info.0 && source == expected_info.1 && message == expected_info.2 {
                 info_found = true;
             }
             if level == expected_error.0
@@ -483,7 +477,7 @@ mod tests {
         let store = BufferedFileStore::<Registry, JSONFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60), // We rely on the threshold for this test
-            349, // Writing must be triggered after the second event is recorded
+            349,                     // Writing must be triggered after the second event is recorded
             true,
         );
 
@@ -531,7 +525,6 @@ mod tests {
 
         // Iterate over each JSON object in the array
         for entry in json_array.iter() {
-
             let level = entry
                 .get("level")
                 .and_then(|v| v.as_u64()) // Parse as u_int
@@ -550,10 +543,7 @@ mod tests {
                 .trim();
 
             // Check if the entries matches expected events
-            if level == expected_info.0
-                && source == expected_info.1
-                && message == expected_info.2
-            {
+            if level == expected_info.0 && source == expected_info.1 && message == expected_info.2 {
                 info_found = true;
             }
 
@@ -616,7 +606,7 @@ mod tests {
         let store = BufferedFileStore::<Registry, MockFileFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60), // We rely on the threshold for this test
-            1, // Writing must be triggered after the first event is recorded
+            1,                       // Writing must be triggered after the first event is recorded
             true,
         );
 

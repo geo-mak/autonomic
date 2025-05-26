@@ -138,24 +138,6 @@ impl OperationContainer {
         self.effector.abort();
     }
 
-    /// Sets or removes sensor.
-    ///
-    /// # Parameters
-    /// - `sensor` - The optional sensor for the operation.
-    ///
-    /// > **Note**:
-    /// > If the passed sensor is:
-    /// > - `None` - The current sensor will be deactivated and removed.
-    /// > - `Some` - The current active sensor will be deactivated without automatic activation of the new sensor.
-    pub(super) fn update_sensor(&mut self, sensor: Option<Sensor>) {
-        // Deactivate the current sensor
-        if let Some(ref current) = self.sensor {
-            current.deactivate();
-        }
-        self.sensor = sensor;
-        trace_trace!(source = self.effector.id(), message = "Sensor changed");
-    }
-
     /// Activates the sensor of an operation.
     ///
     /// # Parameters

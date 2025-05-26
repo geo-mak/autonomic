@@ -2,7 +2,7 @@
 name = "autonomic"
 version = "0.1.0"
 edition = "2021"
-description = "Modular operations management framework"
+description = "General purpose infrastructure control plane"
 license-file = "LICENSE"
 readme = "README.MD"
 repository = "https://github.com/geo-mak/autonomic"

@@ -6,7 +6,7 @@ use tokio_stream::wrappers::WatchStream;
 use crate::core::container::OperationContainer;
 use crate::core::errors::ControllerError;
 use crate::core::operation::{OpState, Operation, OperationInfo, OperationParameters};
-use crate::core::sensor::{ActivationCondition, Sensor};
+use crate::core::sensor::Sensor;
 use crate::core::serde::{DeserializeRegistry, GenericSerializable};
 use crate::core::traits::{Identity, IntoArc};
 use crate::trace_warn;
@@ -105,30 +105,6 @@ impl<'a> OperationController<'a> {
             return Err(ControllerError::Empty);
         }
         if let Some(container) = self.containers.get(id) {
-            return Ok(container);
-        }
-        trace_warn!(
-            source = self.id,
-            message = format!("Operation={} not found", id)
-        );
-        Err(ControllerError::OpNotFound)
-    }
-
-    /// Retrieves a mutable reference to an operation by its ID.
-    ///
-    /// # Parameters
-    /// - `id`: The unique identifier of the operation.
-    ///
-    /// # Returns
-    /// - `Ok(&mut OperationContainer)`: If the operation is found.
-    /// - `Err(ControllerError::Empty)`: If the controller is empty.
-    /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    fn get_mut(&mut self, id: &'a str) -> Result<&mut OperationContainer, ControllerError> {
-        if self.containers.is_empty() {
-            trace_warn!(source = self.id, message = "Empty");
-            return Err(ControllerError::Empty);
-        }
-        if let Some(container) = self.containers.get_mut(id) {
             return Ok(container);
         }
         trace_warn!(
@@ -297,12 +273,10 @@ impl<'a> OperationController<'a> {
         T: OperationParameters,
     {
         match self.get(id) {
-            // Controller Ok
             Ok(container) => match container.activate(params) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(ControllerError::ActivationErr(e)),
             },
-            // Controller err
             Err(e) => Err(e),
         }
     }
@@ -334,12 +308,10 @@ impl<'a> OperationController<'a> {
         T: OperationParameters,
     {
         match self.get(id) {
-            // Controller Ok
             Ok(container) => match container.activate_stream(params) {
                 Ok(stream) => Ok(WatchStream::new(stream)),
                 Err(e) => Err(ControllerError::ActivationErr(e)),
             },
-            // Controller err
             Err(e) => Err(e),
         }
     }
@@ -360,60 +332,6 @@ impl<'a> OperationController<'a> {
                 if container.is_active() {
                     container.abort();
                 }
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Sets or updates sensor associated with operation from condition.
-    ///
-    /// # Parameters
-    /// - `id`: The unique identifier of the operation associated with sensor.
-    /// - `condition`: The condition to create sensor from.
-    ///
-    /// # Returns
-    /// - `Ok(())`: If sensor has been set or updated successfully.
-    /// - `Err(ControllerError::Empty)`: If the controller is empty.
-    /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    pub fn sensor_from(
-        &mut self,
-        id: &'a str,
-        condition: impl ActivationCondition + 'static,
-    ) -> Result<(), ControllerError> {
-        match self.get_mut(id) {
-            Ok(container) => {
-                let sensor = Sensor::new(condition);
-                container.update_sensor(Some(sensor));
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Sets, updates or removes sensor associated with operation.
-    ///
-    /// # Parameters
-    /// - `id`: The unique identifier of the operation associated with sensor.
-    /// - `sensor`: The optional value of type `Sensor`. If it is `None`, sensor will be set to `None` also.
-    ///
-    /// > **Note**:
-    /// > If the passed sensor is:
-    /// > - `None`: The current sensor will be deactivated and removed.
-    /// > - `Some`: The current active sensor will be deactivated and replaced without automatic activation of the new sensor.
-    ///
-    /// # Returns
-    /// - `Ok(())`: If sensor has been set or updated successfully.
-    /// - `Err(ControllerError::Empty)`: If the controller is empty.
-    /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    pub fn update_sensor(
-        &mut self,
-        id: &'a str,
-        sensor: Option<Sensor>,
-    ) -> Result<(), ControllerError> {
-        match self.get_mut(id) {
-            Ok(container) => {
-                container.update_sensor(sensor);
                 Ok(())
             }
             Err(e) => Err(e),

@@ -56,20 +56,18 @@ impl ShellOperation {
 
     async fn run(program: &str, args: &str) -> OperationResult {
         match Self::execute_command(program, args).await {
-            Ok(output) => {
-                match output.status.success() {
-                    true if output.stdout.is_empty() => OperationResult::Ok,
-                    true => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        OperationResult::OkStr(Cow::Owned(stdout))
-                    },
-                    false if output.stderr.is_empty() => OperationResult::Err,
-                    false => {
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                        OperationResult::ErrStr(Cow::Owned(stderr))
-                    },
+            Ok(output) => match output.status.success() {
+                true if output.stdout.is_empty() => OperationResult::Ok,
+                true => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    OperationResult::OkStr(Cow::Owned(stdout))
                 }
-            }
+                false if output.stderr.is_empty() => OperationResult::Err,
+                false => {
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    OperationResult::ErrStr(Cow::Owned(stderr))
+                }
+            },
             Err(err) => OperationResult::ErrStr(Cow::Owned(err.to_string())),
         }
     }
