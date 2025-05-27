@@ -7,7 +7,6 @@ use tracing_subscriber::layer::{Context, Filter};
 use crate::events::traits::RecorderDirective;
 
 /// A per-Layer filter that determines whether a span or event is enabled for an individual layer.
-/// This filter filters call-sites according to the directive.
 ///
 /// # Type Parameters
 /// - `S`: The tracing subscriber type.

@@ -36,14 +36,6 @@ pub struct DefaultEvent {
 }
 
 impl DefaultEvent {
-    /// Creates a new `DefaultEvent` instance.
-    ///
-    /// # Parameters
-    /// - `level`: The level of the event.
-    /// - `source`: The source of the event.
-    /// - `message`: The message of the event.
-    /// - `target`: The target of the event.
-    /// - `timestamp`: The timestamp of the event.
     pub fn new(
         level: &Level,
         source: String,
@@ -67,13 +59,14 @@ impl DefaultEvent {
             2 => Level::INFO,
             3 => Level::WARN,
             4 => Level::ERROR,
-            _ => unreachable!(), // Unreachable anyway, level is not provided as byte in constructor
+            // Level is not passed as byte in constructor.
+            _ => unreachable!(),
         }
     }
 
     #[inline(always)]
-    pub fn level(&self) -> &u8 {
-        &self.level
+    pub fn level(&self) -> u8 {
+        self.level
     }
 
     #[inline(always)]
@@ -197,11 +190,9 @@ where
             message: String::new(),
         };
 
-        // Visit and record required fields
         event.record(&mut visitor);
 
         // TODO: Should events with no source or message remain allowed?
-        // Formated record
         DefaultEvent::new(
             event.metadata().level(),
             visitor.source,

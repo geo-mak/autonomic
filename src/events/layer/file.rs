@@ -42,11 +42,9 @@ impl EventRecorder for CSVFormat {
             message: String::new(),
         };
 
-        // Visit and record required fields
         event.record(&mut visitor);
 
         // TODO: Should events with no source or message remain allowed?
-        // Format as CSV record
         format!(
             "{},\"{}\",\"{}\",\"{}\",{}\n",
             level_to_byte(event.metadata().level()),
@@ -55,7 +53,7 @@ impl EventRecorder for CSVFormat {
             event.metadata().target(),
             Utc::now().to_rfc3339(),
         )
-        .into_bytes() // Cheap conversion, only gets its Vec<u8> internal buffer
+        .into_bytes()
     }
 }
 
@@ -75,7 +73,6 @@ impl EventWriter for CSVFormat {
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
     async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
-        // Open the file for appending (or create it if it doesn't exist)
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -88,7 +85,6 @@ impl EventWriter for CSVFormat {
             file.write_all(header).await?;
         }
 
-        // Write the CSV rows to the file
         file.write_all(buffer).await?;
         Ok(())
     }
@@ -121,11 +117,9 @@ impl EventRecorder for JSONFormat {
             message: String::new(),
         };
 
-        // Visit and record required fields
         event.record(&mut visitor);
 
         // TODO: Should events with no source or message remain allowed?
-        // Format as JSON object member of an array
         format!(
             ",\n{{\n  \"level\": {},\n  \"source\": \"{}\",\n  \"message\": \"{}\",\n  \"target\": \"{}\",\n  \"timestamp\": \"{}\"\n}}",
             level_to_byte(event.metadata().level()),
@@ -133,7 +127,7 @@ impl EventRecorder for JSONFormat {
             visitor.message,
             event.metadata().target(),
             Utc::now().to_rfc3339(),
-        ).into_bytes() // Cheap conversion, only gets its Vec<u8> internal buffer
+        ).into_bytes()
     }
 }
 
@@ -150,7 +144,6 @@ impl EventWriter for JSONFormat {
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
     async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
-        // Open/Create the file in read/write mode
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -249,7 +242,7 @@ where
     /// # Parameters
     /// - `directory`: The directory where events files shall be stored.
     /// - `write_interval`: The waiting period before writing events to file.
-    /// - `capacity`: The size of the buffer in `bytes` to trigger writing.
+    /// - `capacity`: The max size of the buffer in `bytes` to trigger writing.
     /// - `allocate`: If true, the buffer will pre-allocate memory for `capacity` bytes.
     ///
     /// # Returns
@@ -260,8 +253,6 @@ where
         capacity: u32,
         allocate: bool,
     ) -> Filtered<BufferedFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
-        // TODO: Should capacity remain the size of the buffer or the count of events?
-        // Shared data
         let data = Arc::new(StoreData {
             buffer: Mutex::new(if allocate {
                 Vec::with_capacity(capacity as usize)
@@ -273,21 +264,17 @@ where
             capacity,
         });
 
-        // The new instance
         let instance = Self {
             _subscriber: PhantomData,
             _format: PhantomData,
             data: data.clone(),
         };
 
-        // Add the file name to the directory
         directory.push("events");
-        directory.set_extension(F::extension()); // Compute once
+        directory.set_extension(F::extension());
 
-        // Start the writer task
         Self::write(directory, write_interval, data);
 
-        // Return the instance fused with the filter
         instance.with_filter(CallSiteFilter::new())
     }
 
@@ -305,22 +292,22 @@ where
                         buffer
                     },
                     _ = data.write_alert.notified() => {
-                        // The buffer has reached the threshold
                         data.buffer.lock().await
                     }
                 };
 
-                // TODO: No strategy for handling errors when writing.
                 if let Err(e) = F::write(&buffer, &directory).await {
                     // Activate the guard to prevent new recordings
                     data.guard.store(true, Ordering::Release);
                     // Note: Waiters before the activation of the guard,
                     // will be able to write to the buffer when current lock is released.
-                    drop(buffer); // <-- Release the current lock or it will deadlock
-                                  // TODO: No strategy for dealing with current data in the buffer.
-                                  // Acquire the lock again as the last waiter this time
+
+                    // Release the current lock or it will deadlock.
+                    drop(buffer);
+
+                    // TODO: No strategy for dealing with current data in the buffer.
+                    // Acquire the lock again as the last waiter this time
                     let mut buffer = data.buffer.lock().await;
-                    // Do some garbage collection
                     buffer.clear();
                     buffer.shrink_to(0);
                     // Propagate the event for other subscribers
@@ -328,10 +315,9 @@ where
                         source = "BufferedFileStore",
                         message = format!("Stopped: {}", e)
                     );
-                    return; // Exit the task
+                    return;
                 };
 
-                // Clear the buffer after successful write
                 buffer.clear();
             }
         });
@@ -394,34 +380,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffered_store_write_csv() {
-        // Buffered file layer with the log file path
         let store = BufferedFileStore::<Registry, CSVFormat>::new(
             PathBuf::from(""),
-            Duration::from_secs(60), // We rely on the threshold for this test
-            201,                     // Writing must be triggered after the second event is recorded
+            Duration::from_secs(60),
+            201,
             true,
         );
 
-        // Initialize events subscriber with the layer
         let subscriber = Registry::default().with(store);
 
-        // Make subscriber a valid default for the entire test
         let _guard = subscriber::set_default(subscriber);
 
-        // Propagate two events
+        // Propagate two events.
         trace_info!(source = "event 1", message = "info message");
         trace_error!(source = "event 2", message = "error message");
 
-        // Some time to ensure writing
+        // Some time to ensure writing.
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        // Full file path of the expected events file
         let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let full_path = format!("{}/events.csv", cargo_manifest_dir);
 
-        // Read the CSV file
         let mut reader = ReaderBuilder::new()
-            .has_headers(true) // Skip the header
+            .has_headers(true)
             .from_path(&full_path)
             .expect("Failed to open CSV file");
 
@@ -449,10 +430,10 @@ mod tests {
             let source = record.get(1).unwrap().trim();
             let message = record.get(2).unwrap().trim();
 
-            // Check if the entry matches expected values
             if level == expected_info.0 && source == expected_info.1 && message == expected_info.2 {
                 info_found = true;
             }
+
             if level == expected_error.0
                 && source == expected_error.1
                 && message == expected_error.2
@@ -465,7 +446,6 @@ mod tests {
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
-        // Delete the events file
         tokio::fs::remove_file(full_path)
             .await
             .expect("Failed to delete events file");
@@ -473,18 +453,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffered_store_write_json() {
-        // Buffered file layer with the log file path
         let store = BufferedFileStore::<Registry, JSONFormat>::new(
             PathBuf::from(""),
-            Duration::from_secs(60), // We rely on the threshold for this test
-            349,                     // Writing must be triggered after the second event is recorded
+            Duration::from_secs(60),
+            349,
             true,
         );
 
-        // Initialize events subscriber with the layer
         let subscriber = Registry::default().with(store);
 
-        // Make subscriber a valid default for the entire test
         let _guard = subscriber::set_default(subscriber);
 
         // Propagate two events
@@ -494,16 +471,13 @@ mod tests {
         // Some time to ensure writing
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        // Full file path of the expected events file
         let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
         let full_path = format!("{}/events.json", cargo_manifest_dir);
 
-        // Read the entire JSON file as a string
         let file_content = tokio::fs::read_to_string(&full_path)
             .await
             .expect("Failed to read JSON file");
 
-        // Parse the entire file content as a JSON array
         let json_array: Vec<Value> =
             serde_json::from_str(&file_content).expect("Failed to parse JSON file as an array");
 
@@ -525,10 +499,7 @@ mod tests {
 
         // Iterate over each JSON object in the array
         for entry in json_array.iter() {
-            let level = entry
-                .get("level")
-                .and_then(|v| v.as_u64()) // Parse as u_int
-                .unwrap_or(5);
+            let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
 
             let source = entry
                 .get("source")
@@ -555,11 +526,9 @@ mod tests {
             }
         }
 
-        // Assert the expected entries are found
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
-        // Delete the events file
         tokio::fs::remove_file(full_path)
             .await
             .expect("Failed to delete events file");
@@ -602,20 +571,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffered_store_write_error_handling() {
-        // Buffered file layer with the log file path
         let store = BufferedFileStore::<Registry, MockFileFormat>::new(
             PathBuf::from(""),
-            Duration::from_secs(60), // We rely on the threshold for this test
-            1,                       // Writing must be triggered after the first event is recorded
+            Duration::from_secs(60),
+            1,
             true,
         );
 
         let store_data = store.inner().data.clone();
 
-        // Initialize events subscriber with the layer
         let subscriber = Registry::default().with(store);
 
-        // Make subscriber a valid default for the entire test
         let _guard = subscriber::set_default(subscriber);
 
         // Propagate event to trigger flushing the buffer

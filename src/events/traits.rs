@@ -9,9 +9,6 @@ use tracing_core::Metadata;
 /// Trait representing a recorder directive.
 ///
 /// Directive is a boolean condition that checks if the recorder is enabled based on the metadata.
-///
-/// Result of the directive shall be cached by layers or filters or collectors/subscribers
-/// to avoid repeated checks.
 pub trait RecorderDirective {
     /// Checks if the recorder is enabled based on the current metadata.
     /// This check can be **very expensive** and its result shall be cached by layers or filters or
