@@ -1,0 +1,32 @@
+[package]
+name = "autonomic_service"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+autonomic_core = { workspace = true, features = ["tests"]}
+tower = {version = "0.5.2", features = ["futures-util"]}
+mockito = "1.7.0"
+
+[dependencies]
+autonomic_core.workspace = true
+
+tracing.workspace = true
+tokio.workspace = true
+
+futures-util = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+axum = { version = "0.7.7", optional = true }
+axum-server = {version = "0.7.1", features = ["tls-rustls"], optional = true }
+rustls = { version = "0.23.16", features = ["ring"], optional = true }
+reqwest = { version = "0.12.9", features = ["json", "stream", "rustls-tls"], optional = true }
+
+[features]
+openapi = []
+openapi-router = ["openapi", "axum", "futures-util", "tokio-stream"]
+openapi-client = ["openapi", "reqwest", "serde_json", "futures-util", "tokio-stream"]
+openapi-server = ["openapi", "axum"]
+openapi-server-tls = ["openapi-server", "axum-server", "rustls"]
+openapi-all = ["openapi-router", "openapi-client", "openapi-server-tls"]

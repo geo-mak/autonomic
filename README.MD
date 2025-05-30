@@ -12,7 +12,7 @@ specifications and policies with minimal manual control. Architectures also vary
 layers to decentralized embedded control elements.
 
 ### Core Design Principles:
-* Modular and composable with optional modules.
+* Modular and composable with optional components.
 * Concurrent from the ground up.
 * Easy to use and reason about.
 * Stingy with resources and efficient in execution.
@@ -22,14 +22,15 @@ layers to decentralized embedded control elements.
 > - Many components are not public yet or partially public.
 
 ### Implementation Highlights:
-Autonomic consists of multiple modules that can be used to build unified control planes.
+Autonomic consists of multiple crates that can be used to build unified control planes.
 
-### Core Module
-The core module has the following main components:
+### Core Crate
+The core crate has the following main components:
 
 * Operation: Operations are the core abstractions that define **concurrent** and **independent** **execution contexts**
 with metadata and execution logic.<br>
-Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can be activated with **different values** each time.<br>
+Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can <br>
+be activated with **different values** each time.<br>
 It is up to the operation to decide how to handle the parameters, which can be **ignored** or **rejected** with an <br>
 error message.<br><br>
 
@@ -39,8 +40,8 @@ set of operations.<br> When an operation is submitted to the controller, it is a
 * Container: Encapsulates the operation and controls its associated components.<br>
 Containers are private and managed internally by the system.<br><br>
 
-* Effector: The controlling wrapper around operations inside `OperationContainer`, and it is responsible for the 
-activation and state management of operations. Effectors are private and managed internally by the system.<br><br>
+* Effector: The controlling wrapper around operations inside the container, and it is responsible for the activation <br>
+and state management of operations. Effectors are private and managed internally by the system.<br><br>
 
 * Sensor: An observer that encapsulates an activation condition.<br>
 Activation conditions are types that determine when an operation should be activated, and they are defined by <br>
@@ -49,13 +50,13 @@ implementing the `ActivationCondition` trait, which allow unconstrained definiti
 * Service: traits that define the control APIs (syscalls) of various components.<br><br>
 
 * Data: Lightweight persistence component that defines standard APIs to persist and query data.<br>
-**Note**: Data component is not published yet.<br><br>
+**Note**: Data component is not public yet.<br><br>
 
 * Tracing: Types and macros to support structured tracing of events.<br><br>
 
-### Optional Modules:
+### Other Crates:
 
-The current optional models are:
+The current public crates are:
 
 * Service: Concrete implementations of services and other components.<br>
 Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client <br>

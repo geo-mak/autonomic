@@ -1,66 +1,37 @@
-[package]
+[workspace]
+members = [
+    "core",
+    "service",
+    "events",
+    "operations",
+]
+
+resolver = "3"
+
+[workspace.package]
 name = "autonomic"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "General purpose infrastructure control plane"
 license-file = "LICENSE"
 readme = "README.MD"
 repository = "https://github.com/geo-mak/autonomic"
 
-[[bench]]
-name = "benchmarks"
-harness = false
-required-features = ["tests"]
+[workspace.dependencies]
+autonomic_core = { path = "core" }
 
-[dev-dependencies]
-# Benchmarking
-criterion = "0.6.0"
-
-tracing-subscriber = {version = "0.3.18", features = ["env-filter"]}
-tower = "0.5.1"
-reqwest = {version = "0.12.9", features = ["json", "stream", "rustls-tls"]}
-mockito = "1.6.0"
-chrono = {version = "0.4.38", features = ["serde"]}
-csv = "1.3.1"
-
-[dependencies]
-#============= Core Dependencies =============#
-tokio = { version = "1.39.3", features = ["rt-multi-thread", "macros", "time", "sync"]}
-tokio-stream = { version = "0.1", features = ["sync"]}
-futures-util = { version =  "0.3.30"}
-tracing = { version = "0.1.40"}
-serde = { version = "1.0.209", features = ["derive", "rc"]}
-serde_json = "1.0.127"
-async-trait = { version = "0.1.82" }
 lazy_static = "1.5.0"
 
-#============= Optional Dependencies =============#
+tokio = { version = "1.39.3", features = ["rt-multi-thread", "macros"]}
+tokio-stream = { version = "0.1", features = ["sync"]}
+futures-util = { version =  "0.3.30"}
 
-# Shared
-chrono = {version = "0.4.38", features = ["serde"], optional = true}
+serde = { version = "1.0.209", features = ["derive", "rc"]}
+serde_json = "1.0.127"
 
-# Events
-tracing-subscriber = {version = "0.3.18", optional = true}
-tracing-core = {version = "0.1.32", optional = true}
+tracing = { version = "0.1.40"}
+tracing-core = { version = "0.1.32"}
+tracing-subscriber = { version = "0.3.18"}
 
-# OpenAPI
-axum = {version = "0.7.7", optional = true}
-axum-server = {version = "0.7.1", features = ["tls-rustls"], optional = true}
-rustls = {version = "0.23.16", features = ["ring"], optional = true}
-reqwest = {version = "0.12.9", features = ["json", "stream", "rustls-tls"], optional = true}
-
-[features]
-
-events = ["chrono", "tokio/fs", "tracing-subscriber", "tracing-core"]
-
-operations = ["tokio/process", "chrono"]
-
-openapi = []
-openapi-router = ["openapi", "axum"]
-openapi-client = ["openapi", "reqwest"]
-openapi-server = ["openapi", "axum"]
-openapi-server-tls = ["openapi-server", "axum-server", "rustls"]
-openapi-all = ["openapi-router", "openapi-client", "openapi-server-tls"]
-
-all = ["events", "openapi-all", "operations"]
-
+async-trait = { version = "0.1.82" }
+chrono = { version = "0.4.38", features = ["serde"] }
