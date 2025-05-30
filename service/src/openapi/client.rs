@@ -7,8 +7,9 @@ use tokio_stream::Stream;
 use autonomic_core::errors::ControllerError;
 use autonomic_core::operation::{OpState, OperationInfo};
 use autonomic_core::serde::AnySerializable;
-use autonomic_core::service::ControllerClient;
 use autonomic_core::trace_trace;
+
+use autonomic_api::controller::ControllerClient;
 
 /// Client for interacting with the OpenAPI service.
 /// It implements methods corresponding to the service endpoints and returns typed results.

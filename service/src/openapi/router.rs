@@ -18,9 +18,10 @@ use autonomic_core::controller::OperationController;
 use autonomic_core::errors::{ActivationError, ControllerError};
 use autonomic_core::operation::{OpState, OperationInfo};
 use autonomic_core::serde::AnySerializable;
-use autonomic_core::service::ControllerService;
 use autonomic_core::trace_trace;
 use autonomic_core::traits::Identity;
+
+use autonomic_api::controller::ControllerService;
 
 /// Creates a router instance with endpoints related to the controller service.
 ///

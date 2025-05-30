@@ -47,8 +47,6 @@ and state management of operations. Effectors are private and managed internally
 Activation conditions are types that determine when an operation should be activated, and they are defined by <br>
 implementing the `ActivationCondition` trait, which allow unconstrained definition of conditions.<br><br>
 
-* Service: traits that define the control APIs (syscalls) of various components.<br><br>
-
 * Data: Lightweight persistence component that defines standard APIs to persist and query data.<br>
 **Note**: Data component is not public yet.<br><br>
 
@@ -57,6 +55,8 @@ implementing the `ActivationCondition` trait, which allow unconstrained definiti
 ### Other Crates:
 
 The current public crates are:
+
+* API: traits that define the public control APIs (syscalls) of various components.<br><br>
 
 * Service: Concrete implementations of services and other components.<br>
 Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client <br>

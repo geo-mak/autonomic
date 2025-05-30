@@ -1,9 +1,6 @@
-use std::future::Future;
-
+use autonomic_core::operation::{OpState, OperationInfo};
+use autonomic_core::serde::AnySerializable;
 use futures_util::Stream;
-
-use crate::operation::{OpState, OperationInfo};
-use crate::serde::AnySerializable;
 
 /// Service trait for a controller-service.
 /// The service provides methods for interacting with the controller.

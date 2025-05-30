@@ -1,0 +1,9 @@
+[package]
+name = "autonomic_api"
+version = "0.1.0"
+edition = "2024"
+description = "The public API definition of the autonomic components"
+
+[dependencies]
+autonomic_core.workspace = true
+futures-util.workspace = true

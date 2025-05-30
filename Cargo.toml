@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "api",
     "core",
     "service",
     "events",
@@ -19,6 +20,7 @@ repository = "https://github.com/geo-mak/autonomic"
 
 [workspace.dependencies]
 autonomic_core = { path = "core" }
+autonomic_api = { path = "api" }
 
 lazy_static = "1.5.0"
 
