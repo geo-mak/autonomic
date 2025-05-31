@@ -5,7 +5,7 @@ use tokio_stream::wrappers::WatchStream;
 
 use crate::container::OperationContainer;
 use crate::errors::ControllerError;
-use crate::operation::{OpState, Operation, OperationInfo, OperationParameters};
+use crate::operation::{OpInfo, OpState, Operation, OperationParameters};
 use crate::sensor::Sensor;
 use crate::serde::{DeserializeRegistry, GenericSerializable};
 use crate::trace_warn;
@@ -123,7 +123,7 @@ impl<'a> OperationController<'a> {
     /// - `Ok(OperationInfo)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    pub fn operation(&self, id: &'a str) -> Result<OperationInfo, ControllerError> {
+    pub fn operation(&self, id: &'a str) -> Result<OpInfo, ControllerError> {
         match self.get(id) {
             Ok(container) => Ok(container.info()),
             Err(e) => Err(e),
@@ -135,7 +135,7 @@ impl<'a> OperationController<'a> {
     /// # Returns
     /// - `Ok(Vec<OperationInfo>)`: If the controller in not empty.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
-    pub fn operations(&self) -> Result<Vec<OperationInfo>, ControllerError> {
+    pub fn operations(&self) -> Result<Vec<OpInfo>, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
             return Err(ControllerError::Empty);

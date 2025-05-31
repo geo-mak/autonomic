@@ -17,7 +17,9 @@ tokio.workspace = true
 
 futures-util = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
+
 serde_json = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 axum = { version = "0.7.7", optional = true }
 axum-server = {version = "0.7.1", features = ["tls-rustls"], optional = true }
@@ -27,7 +29,7 @@ reqwest = { version = "0.12.9", features = ["json", "stream", "rustls-tls"], opt
 [features]
 openapi = []
 openapi-router = ["openapi", "axum", "futures-util", "tokio-stream"]
-openapi-client = ["openapi", "reqwest", "serde_json", "futures-util", "tokio-stream"]
+openapi-client = ["openapi", "reqwest", "serde_json", "serde", "futures-util", "tokio-stream"]
 openapi-server = ["openapi", "axum"]
 openapi-server-tls = ["openapi-server", "axum-server", "rustls"]
 openapi-all = ["openapi-router", "openapi-client", "openapi-server-tls"]

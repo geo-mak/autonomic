@@ -1,15 +1,22 @@
-use reqwest::Client;
+use reqwest::{Client, Error, Response};
+use std::marker::PhantomData;
 
 use futures_util::StreamExt;
-
 use tokio_stream::Stream;
 
 use autonomic_core::errors::ControllerError;
-use autonomic_core::operation::{OpState, OperationInfo};
+use autonomic_core::operation::{OpInfo, OpState};
 use autonomic_core::serde::AnySerializable;
 use autonomic_core::trace_trace;
 
 use autonomic_api::controller::ControllerClient;
+
+/// Error type for the OpenAPIClient.
+#[derive(Debug)]
+pub enum OpenAPIClientError {
+    ResponseError(ControllerError),
+    RequestError(reqwest::Error),
+}
 
 /// Client for interacting with the OpenAPI service.
 /// It implements methods corresponding to the service endpoints and returns typed results.
@@ -19,22 +26,100 @@ pub struct OpenAPIClient<'a> {
     host: &'a str,
 }
 
+/// Helper type to transform the raw stream to typed stream.
+pub struct StreamMapper<T>
+where
+    T: for<'de> serde::de::Deserialize<'de>,
+{
+    response: Response,
+    _t: PhantomData<T>,
+}
+
+impl<T> StreamMapper<T>
+where
+    T: for<'de> serde::de::Deserialize<'de>,
+{
+    /// Transforms the stream from a stream of bytes to stream of type `T`.
+    pub fn map(self) -> impl Stream<Item = T> {
+        self.response.bytes_stream().map(|result| {
+            let event_bytes = result.expect("Failed to read event's bytes");
+            let event_str = std::str::from_utf8(&event_bytes)
+                .expect("Failed to convert event's bytes to string");
+            let state_str = event_str.trim_start_matches("data: ");
+            serde_json::from_str::<T>(&state_str).expect("Failed to deserialize event as `T`")
+        })
+    }
+}
+
 impl<'a> OpenAPIClient<'a> {
+    const CLIENT_LABEL: &'static str = "OpenAPIClient";
+
     /// Creates a new OpenAPIClient with the specified base URL.
     pub fn new(client: Client, host: &'a str) -> Self {
         OpenAPIClient { client, host }
     }
-}
 
-/// Error type for the OpenAPIClient.
-#[derive(Debug)]
-pub enum OpenAPIClientError {
-    ResponseError(ControllerError),
-    RequestError(reqwest::Error),
+    #[inline]
+    async fn parse_response_as<T>(response: Response) -> T
+    where
+        T: for<'de> serde::Deserialize<'de>,
+    {
+        response
+            .json::<T>()
+            .await
+            .expect("Failed to deserialize response")
+    }
+
+    async fn match_request_result<C, F, T>(
+        result: Result<Response, Error>,
+        on_success: C,
+    ) -> Result<T, OpenAPIClientError>
+    where
+        C: FnOnce(Response) -> F,
+        F: std::future::Future<Output = T>,
+        T: Sized,
+    {
+        match result {
+            Ok(response) => {
+                if response.status().is_success() {
+                    Ok(on_success(response).await)
+                } else {
+                    let err = Self::parse_response_as::<ControllerError>(response).await;
+                    Err(OpenAPIClientError::ResponseError(err))
+                }
+            }
+            Err(err) => Err(OpenAPIClientError::RequestError(err)),
+        }
+    }
+
+    async fn match_and_parse_as<T>(result: Result<Response, Error>) -> Result<T, OpenAPIClientError>
+    where
+        T: for<'de> serde::Deserialize<'de>,
+    {
+        Self::match_request_result(result, async |response: Response| {
+            Self::parse_response_as::<T>(response).await
+        })
+        .await
+    }
+
+    #[inline]
+    async fn match_ok(result: Result<Response, Error>) -> Result<(), OpenAPIClientError> {
+        Self::match_request_result(result, async |_| ()).await
+    }
 }
 
 impl<'a> ControllerClient for OpenAPIClient<'a> {
     type ClientError = OpenAPIClientError;
+    type ControllerID = &'a str;
+    type OperationID = &'a str;
+    type OperationInfo = OpInfo;
+    type OperationsInfo = Vec<OpInfo>;
+    type ActiveOperations = Vec<String>;
+    type ActivationParams = Option<&'a AnySerializable>;
+
+    // Stream is always returned as opaque type (impl Stream), which not allowed as associated type
+    // or as type alias currently.
+    type StateStream = StreamMapper<OpState>;
 
     /// Retrieves a specific operation by its ID.
     ///
@@ -43,15 +128,15 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `operation_id`: A string slice that holds the operation ID.
     ///
     /// # Returns
-    /// - `Ok(OperationInfo)`: If the operation is found.
+    /// - `Ok(OpInfo)`: If the operation is found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn operation(
         &self,
-        controller_id: &str,
-        operation_id: &str,
-    ) -> Result<OperationInfo, Self::ClientError> {
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
+    ) -> Result<Self::OperationInfo, Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to get operation={} for controller={}",
                 operation_id, controller_id
@@ -59,24 +144,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/op/{}", self.host, controller_id, operation_id);
         let result = self.client.get(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let op_info = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response result");
-                    Ok(op_info)
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_and_parse_as::<Self::OperationInfo>(result).await
     }
 
     /// Retrieves all operations for a specific controller.
@@ -85,14 +153,14 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `controller_id`: A string slice that holds the controller ID.
     ///
     /// # Returns
-    /// - `Ok(Vec<OperationInfo>)`: If the operations are found.
+    /// - `Ok(Vec<OpInfo>)`: If the operations are found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn operations(
         &self,
-        controller_id: &str,
-    ) -> Result<Vec<OperationInfo>, Self::ClientError> {
+        controller_id: Self::ControllerID,
+    ) -> Result<Self::OperationsInfo, Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to get all operations for controller={}",
                 controller_id
@@ -100,24 +168,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/ops", self.host, controller_id);
         let result = self.client.get(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let ops = response
-                        .json::<Vec<OperationInfo>>()
-                        .await
-                        .expect("Failed to deserialize response result");
-                    Ok(ops)
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_and_parse_as::<Self::OperationsInfo>(result).await
     }
 
     /// Retrieves the currently active operations for a specific controller.
@@ -130,10 +181,10 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn active_operations(
         &self,
-        controller_id: &str,
-    ) -> Result<Vec<String>, Self::ClientError> {
+        controller_id: Self::ControllerID,
+    ) -> Result<Self::ActiveOperations, Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to get active operations for controller={}",
                 controller_id
@@ -141,24 +192,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/active_ops", self.host, controller_id);
         let result = self.client.get(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let active_op = response
-                        .json::<Vec<String>>()
-                        .await
-                        .expect("Failed to deserialize response result");
-                    Ok(active_op)
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_and_parse_as::<Self::ActiveOperations>(result).await
     }
 
     /// Activates a specific operation without streaming its state updates.
@@ -173,12 +207,12 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn activate(
         &self,
-        controller_id: &str,
-        operation_id: &str,
-        params: Option<&AnySerializable>,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
+        params: Self::ActivationParams,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to activate operation={} for controller={}",
                 operation_id, controller_id
@@ -186,20 +220,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/activate/{}", self.host, controller_id, operation_id);
         let result = self.client.post(&url).json(&params).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 
     /// Activates a specific operation and returns a stream of its state updates.
@@ -214,12 +235,12 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn activate_stream(
         &self,
-        controller_id: &str,
-        operation_id: &str,
-        params: Option<&AnySerializable>,
-    ) -> Result<impl Stream<Item = OpState>, Self::ClientError> {
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
+        params: Self::ActivationParams,
+    ) -> Result<Self::StateStream, Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to activate operation={} for controller={}",
                 operation_id, controller_id
@@ -230,31 +251,11 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
             self.host, controller_id, operation_id
         );
         let result = self.client.post(&url).json(&params).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let stream = response.bytes_stream().map(|result| {
-                        let event_bytes = result.expect("Failed to read event's bytes");
-                        // Convert to string literal
-                        let event_str = std::str::from_utf8(&event_bytes)
-                            .expect("Failed to convert event's bytes to string");
-                        // Remove `data` field from `MessageEvent`
-                        let state_str = event_str.trim_start_matches("data: ");
-                        // Parse as `OpState`
-                        serde_json::from_str::<OpState>(&state_str)
-                            .expect("Failed to deserialize event")
-                    });
-                    Ok(stream)
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_request_result(result, async |response: Response| StreamMapper {
+            response,
+            _t: PhantomData,
+        })
+        .await
     }
 
     /// Aborts a specific operation.
@@ -269,11 +270,11 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn abort(
         &self,
-        controller_id: &str,
-        operation_id: &str,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to abort operation={} for controller={}",
                 operation_id, controller_id
@@ -281,20 +282,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/abort/{}", self.host, controller_id, operation_id);
         let result = self.client.post(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 
     /// Locks a specific operation.
@@ -306,9 +294,13 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// # Returns
     /// - `Ok(())`: If the abort is requested without issues.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn lock(&self, controller_id: &str, operation_id: &str) -> Result<(), Self::ClientError> {
+    async fn lock(
+        &self,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
+    ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to lock operation={} for controller={}",
                 operation_id, controller_id
@@ -316,20 +308,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/lock/{}", self.host, controller_id, operation_id);
         let result = self.client.post(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 
     /// Unlocks a specific operation.
@@ -343,11 +322,11 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn unlock(
         &self,
-        controller_id: &str,
-        operation_id: &str,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to unlock operation={} for controller={}",
                 operation_id, controller_id
@@ -355,20 +334,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
         let url = format!("{}/{}/unlock/{}", self.host, controller_id, operation_id);
         let result = self.client.post(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 
     /// Activates the sensor of the operation if it has been set, and it is currently inactive.
@@ -382,11 +348,11 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn activate_sensor(
         &self,
-        controller_id: &str,
-        operation_id: &str,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to activate sensor for operation={} for controller={}",
                 operation_id, controller_id
@@ -399,20 +365,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
 
         let result = self.client.post(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 
     /// Deactivates the sensor of the operation if it has been set, and it is currently active.
@@ -426,11 +379,11 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn deactivate_sensor(
         &self,
-        controller_id: &str,
-        operation_id: &str,
+        controller_id: Self::ControllerID,
+        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = "OpenAPIClient",
+            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to deactivate sensor for operation={} for controller={}",
                 operation_id, controller_id
@@ -443,20 +396,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         );
 
         let result = self.client.post(&url).send().await;
-        match result {
-            Ok(response) => {
-                if response.status().is_success() {
-                    Ok(())
-                } else {
-                    let err: ControllerError = response
-                        .json()
-                        .await
-                        .expect("Failed to deserialize response error");
-                    Err(OpenAPIClientError::ResponseError(err))
-                }
-            }
-            Err(err) => Err(OpenAPIClientError::RequestError(err)),
-        }
+        Self::match_ok(result).await
     }
 }
 
@@ -479,7 +419,7 @@ mod tests {
 
         let controller_id = "controller1";
         let operation_id = "123";
-        let operation_info = OperationInfo::from_str("Test Operation", "123", false, false, false);
+        let operation_info = OpInfo::from_str("Test Operation", "123", false, false, false);
 
         // Response body as JSON
         let body = serde_json::to_string(&operation_info).unwrap();
@@ -513,8 +453,8 @@ mod tests {
 
         let controller_id = "controller1";
         let operations_info = vec![
-            OperationInfo::from_str("Operation1", "1", false, false, false),
-            OperationInfo::from_str("Operation2", "2", false, false, false),
+            OpInfo::from_str("Operation1", "1", false, false, false),
+            OpInfo::from_str("Operation2", "2", false, false, false),
         ];
 
         // Response body as JSON
@@ -653,12 +593,13 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let mut stream = api_client
+        let mut stream_map = api_client
             .activate_stream(controller_id, operation_id, None)
             .await
-            .unwrap();
+            .unwrap()
+            .map();
 
-        while let Some(result) = stream.next().await {
+        while let Some(result) = stream_map.next().await {
             assert_eq!(result, operation_state);
         }
     }
@@ -683,7 +624,8 @@ mod tests {
             )
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(body) // TODO: Not accurate because server sends SSE with MessageEvent with payload behind "data"
+            // TODO: Not accurate because server sends SSE as MessageEvent with payload behind "data"
+            .with_body(body)
             .create();
 
         let client = ClientBuilder::new().build().unwrap();
@@ -691,12 +633,13 @@ mod tests {
 
         let params = AnySerializable::new_register(TestRetry::new(3, 1000));
 
-        let mut stream = api_client
+        let mut stream_map = api_client
             .activate_stream(controller_id, operation_id, Some(&params))
             .await
-            .unwrap();
+            .unwrap()
+            .map();
 
-        while let Some(result) = stream.next().await {
+        while let Some(result) = stream_map.next().await {
             assert_eq!(result, operation_state);
         }
     }

@@ -10,7 +10,7 @@ use crate::testkit::params::TestRetry;
 use crate::testkit::tracing::init_tracing;
 
 use crate::controller::OperationController;
-use crate::operation::{OpState, OperationInfo};
+use crate::operation::{OpInfo, OpState};
 use crate::serde::AnySerializable;
 use crate::traits::Identity;
 
@@ -21,10 +21,10 @@ mod tests_serde_core_types {
 
     #[test]
     fn test_serde_op_info() {
-        let op_info = OperationInfo::from_str("Test Task", "12345", false, false, false);
+        let op_info = OpInfo::from_str("Test Task", "12345", false, false, false);
 
         let serialized = to_string(&op_info).expect("Failed to serialize OperationInfo");
-        let deserialized: OperationInfo =
+        let deserialized: OpInfo =
             from_str(&serialized).expect("Failed to deserialize OperationInfo");
 
         assert_eq!(op_info.description(), deserialized.description());

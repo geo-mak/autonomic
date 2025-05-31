@@ -16,7 +16,7 @@ use axum::{
 
 use autonomic_core::controller::OperationController;
 use autonomic_core::errors::{ActivationError, ControllerError};
-use autonomic_core::operation::{OpState, OperationInfo};
+use autonomic_core::operation::{OpInfo, OpState};
 use autonomic_core::serde::AnySerializable;
 use autonomic_core::trace_trace;
 use autonomic_core::traits::Identity;
@@ -117,11 +117,6 @@ impl IntoResponse for ServiceError {
     }
 }
 
-#[inline(always)]
-const fn into_service_error(err: ControllerError) -> ServiceError {
-    ServiceError(err)
-}
-
 /// Fallback handler
 async fn not_implemented() -> ServiceError {
     ServiceError(ControllerError::NotImplemented)
@@ -129,18 +124,20 @@ async fn not_implemented() -> ServiceError {
 
 type StateStream = Sse<Map<WatchStream<OpState>, fn(OpState) -> Result<Event, Infallible>>>;
 
+const SERVICE_LABEL: &'static str = "OpenAPIService";
+
 struct OpenAPIEndpoints;
 
 impl ControllerService for OpenAPIEndpoints {
     // **Note**: We use `Arc` because `Extension` clones the value on each request.
     // Making the controller static can be a better option.
-    type ControllerParameter = Extension<Arc<OperationController<'static>>>;
+    type Controller = Extension<Arc<OperationController<'static>>>;
     type ServiceError = ServiceError;
-    type OperationIDParameter = Path<String>;
-    type OperationReturn = Json<OperationInfo>;
-    type OperationsReturn = Json<Vec<OperationInfo>>;
+    type OperationID = Path<String>;
+    type OperationReturn = Json<OpInfo>;
+    type OperationsReturn = Json<Vec<OpInfo>>;
     type ActiveOperationsReturn = Json<Vec<&'static str>>;
-    type ActivationParamsOption = Json<Option<AnySerializable>>;
+    type ActivationParams = Json<Option<AnySerializable>>;
     type ActivateReturn = StatusCode;
     type ActivateStreamReturn = StateStream;
     type AbortReturn = StatusCode;
@@ -156,21 +153,21 @@ impl ControllerService for OpenAPIEndpoints {
     /// - `id`: The ID of the operation to retrieve.
     ///
     /// # Returns
-    /// - Status code `200` and `Json<OperationInfo>` as body: If the request was successful.
+    /// - Status code `200` and `Json<OpInfo>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
     async fn operation(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::OperationReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to get operation={}", id)
         );
         // further data is done in the controller
         match controller.operation(id.as_str()) {
             Ok(op_info) => Ok(Json(op_info)),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -180,19 +177,19 @@ impl ControllerService for OpenAPIEndpoints {
     /// - `controller`: the controller instance.
     ///
     /// # Returns
-    /// - Status code `200` and `Json<Vec<OperationInfo>>` as body: If the request was successful.
+    /// - Status code `200` and `Json<Vec<OpInfo>>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
     async fn operations(
-        Extension(controller): Self::ControllerParameter,
+        Extension(controller): Self::Controller,
     ) -> Result<Self::OperationsReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = "Received HTTP request to get all operations"
         );
         // further data is done in the controller
         match controller.operations() {
             Ok(op_infos) => Ok(Json(op_infos)),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -209,15 +206,15 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::NoActiveOps>` as body: If the controller is empty.
     async fn active_operations(
-        Extension(controller): Self::ControllerParameter,
+        Extension(controller): Self::Controller,
     ) -> Result<Self::ActiveOperationsReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = "Received HTTP request to get all active operations"
         );
         match controller.active_operations() {
             Ok(ops) => Ok(Json(ops)),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -235,17 +232,17 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `409` and `Json<ActivationError::Active>` as body: If the operation is already active.
     /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
     async fn activate(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
-        Json(params): Self::ActivationParamsOption,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
+        Json(params): Self::ActivationParams,
     ) -> Result<Self::ActivateReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to activate operation={}", id)
         );
         match controller.activate(id.as_str(), params) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -266,12 +263,12 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `409` and `Json<ActivationError::Active>` as body: If the operation is already active.
     /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
     async fn activate_stream(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
-        Json(params): Self::ActivationParamsOption,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
+        Json(params): Self::ActivationParams,
     ) -> Result<Self::ActivateStreamReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!(
                 "Received HTTP request to activate operation={} with streaming",
                 id
@@ -293,12 +290,12 @@ impl ControllerService for OpenAPIEndpoints {
                     )
                 });
                 trace_trace!(
-                    source = "OpenAPIService",
+                    source = SERVICE_LABEL,
                     message = format!("Starting SSE stream for operation={}", id)
                 );
                 Ok(Sse::new(stream_map))
             }
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -317,16 +314,16 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
     async fn abort(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::AbortReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to abort operation={}", id)
         );
         match controller.abort(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -341,16 +338,16 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
     async fn lock(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::LockReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to lock operation={}", id)
         );
         match controller.lock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
     /// Unlocks a specific operation.
@@ -364,16 +361,16 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
     async fn unlock(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::UnlockReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to unlock operation={}", id)
         );
         match controller.unlock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -391,16 +388,16 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `409` and `Json<ActivationError::Active>` as body: If the sensor is already active.
     /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
     async fn activate_sensor(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::ActivateSensorReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to activate sensor={}", id)
         );
         match controller.activate_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 
@@ -416,16 +413,16 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
     /// - Status code `404` and `Json<ActivationError::NotSet>` as body: If the sensor has not been set.
     async fn deactivate_sensor(
-        Extension(controller): Self::ControllerParameter,
-        Path(id): Self::OperationIDParameter,
+        Extension(controller): Self::Controller,
+        Path(id): Self::OperationID,
     ) -> Result<Self::DeactivateSensorReturn, Self::ServiceError> {
         trace_trace!(
-            source = "OpenAPIService",
+            source = SERVICE_LABEL,
             message = format!("Received HTTP request to deactivate sensor={}", id)
         );
         match controller.deactivate_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
-            Err(err) => Err(into_service_error(err)),
+            Err(err) => Err(ServiceError(err)),
         }
     }
 }
@@ -476,8 +473,8 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let err = serde_json::from_slice::<ControllerError>(&body)
-            .expect("Failed to deserialize OperationInfo");
+        let err =
+            serde_json::from_slice::<ControllerError>(&body).expect("Failed to deserialize OpInfo");
 
         assert_eq!(err, ControllerError::NotImplemented)
     }
@@ -510,8 +507,8 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let received_info: OperationInfo =
-            serde_json::from_slice(&body).expect("Failed to deserialize OperationInfo");
+        let received_info: OpInfo =
+            serde_json::from_slice(&body).expect("Failed to deserialize OpInfo");
 
         assert_eq!(received_info.id(), operation_id);
         assert_eq!(received_info.description(), operation_desc);
@@ -559,13 +556,13 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let mut operations_info: Vec<OperationInfo> =
+        let mut operations_info: Vec<OpInfo> =
             serde_json::from_slice(&body).expect("Failed to deserialize slice as vector");
 
         let mut expected_ops_info = vec![
-            OperationInfo::from_str(operation_1_id, operation_1_des, false, false, false),
-            OperationInfo::from_str(operation_2_id, operation_2_des, false, false, false),
-            OperationInfo::from_str(operation_3_id, operation_3_des, false, false, false),
+            OpInfo::from_str(operation_1_id, operation_1_des, false, false, false),
+            OpInfo::from_str(operation_2_id, operation_2_des, false, false, false),
+            OpInfo::from_str(operation_3_id, operation_3_des, false, false, false),
         ];
 
         // Sort both vectors

@@ -5,7 +5,7 @@ use tokio::sync::watch::Receiver;
 
 use crate::effector::Effector;
 use crate::errors::ActivationError;
-use crate::operation::{OpState, Operation, OperationInfo, OperationParameters};
+use crate::operation::{OpInfo, OpState, Operation, OperationParameters};
 use crate::sensor::Sensor;
 use crate::traits::{IntoArc, IntoBox};
 use crate::{trace_error, trace_trace, trace_warn};
@@ -23,8 +23,8 @@ impl OperationContainer {
         }
     }
 
-    pub(super) fn info(&self) -> OperationInfo {
-        OperationInfo::new(
+    pub(super) fn info(&self) -> OpInfo {
+        OpInfo::new(
             Cow::Borrowed(self.effector.id()),
             Cow::Borrowed(self.effector.describe()),
             self.effector.is_active(),

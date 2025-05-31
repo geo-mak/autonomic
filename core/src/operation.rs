@@ -191,7 +191,7 @@ impl Display for OpState {
 
 /// Lightweight operation information that is fully serializable.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct OperationInfo {
+pub struct OpInfo {
     id: Cow<'static, str>,
     description: Cow<'static, str>,
     active: bool,
@@ -200,7 +200,7 @@ pub struct OperationInfo {
     // TODO: Add last known state when the data API is ready
 }
 
-impl OperationInfo {
+impl OpInfo {
     pub fn new(
         id: Cow<'static, str>,
         description: Cow<'static, str>,
@@ -259,7 +259,7 @@ impl OperationInfo {
     }
 }
 
-impl Display for OperationInfo {
+impl Display for OpInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
