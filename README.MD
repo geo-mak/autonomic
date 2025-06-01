@@ -20,6 +20,7 @@ layers to decentralized embedded control elements.
 > Note:
 > - No stable data model. It is subject to major changes without prior notice. 
 > - Many components are not public yet or partially public.
+> - The current implementation "tactically" uses a set of dependencies as scaffolding, but ultimately many of these will be replaced by custom solutions and internal protocols to minimize indirections and reduce the levels of abstraction that naturally reduce runtime efficiency.
 
 ### Implementation Highlights:
 Autonomic consists of multiple crates that can be used to build unified control planes.
