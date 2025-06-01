@@ -47,7 +47,7 @@ impl EventRecorder for CSVFormat {
         // TODO: Should events with no source or message remain allowed?
         format!(
             "{},\"{}\",\"{}\",\"{}\",{}\n",
-            level_to_byte(event.metadata().level()),
+            level_to_byte(*event.metadata().level()),
             visitor.source,
             visitor.message,
             event.metadata().target(),
@@ -122,7 +122,7 @@ impl EventRecorder for JSONFormat {
         // TODO: Should events with no source or message remain allowed?
         format!(
             ",\n{{\n  \"level\": {},\n  \"source\": \"{}\",\n  \"message\": \"{}\",\n  \"target\": \"{}\",\n  \"timestamp\": \"{}\"\n}}",
-            level_to_byte(event.metadata().level()),
+            level_to_byte(*event.metadata().level()),
             visitor.source,
             visitor.message,
             event.metadata().target(),

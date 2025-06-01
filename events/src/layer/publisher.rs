@@ -212,7 +212,7 @@ mod tests {
 
         // Expected INFO event
         let event_1 = DefaultEvent::new(
-            &Level::INFO,
+            Level::INFO,
             "published event 1".to_string(),
             "info message".to_string(),
             "path".to_string(),
@@ -221,7 +221,7 @@ mod tests {
 
         // Expected ERROR event
         let event_2 = DefaultEvent::new(
-            &Level::ERROR,
+            Level::ERROR,
             "published event 2".to_string(),
             "error message".to_string(),
             "path".to_string(),

@@ -15,8 +15,8 @@ use tracing_core::field::Visit;
 use crate::traits::{EventRecorder, RecorderDirective};
 
 /// Converts `Level` to byte representation.
-pub fn level_to_byte(level: &Level) -> u8 {
-    match *level {
+pub fn level_to_byte(level: Level) -> u8 {
+    match level {
         Level::TRACE => 0,
         Level::DEBUG => 1,
         Level::INFO => 2,
@@ -37,7 +37,7 @@ pub struct DefaultEvent {
 
 impl DefaultEvent {
     pub fn new(
-        level: &Level,
+        level: Level,
         source: String,
         message: String,
         target: String,
@@ -193,7 +193,7 @@ where
 
         // TODO: Should events with no source or message remain allowed?
         DefaultEvent::new(
-            event.metadata().level(),
+            *event.metadata().level(),
             visitor.source,
             visitor.message,
             event.metadata().target().to_string(),
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_default_schema_serde() {
         let original_schema = DefaultEvent::new(
-            &Level::INFO,
+            Level::INFO,
             "test_source".to_string(),
             "test_message".to_string(),
             "test_path".to_string(),
