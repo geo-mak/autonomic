@@ -117,7 +117,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     type ActiveOperations = Vec<String>;
     type ActivationParams = Option<&'a AnySerializable>;
 
-    // Stream is always returned as opaque type (impl Stream), which not allowed as associated type
+    // Stream is always returned as opaque type (impl Stream), which is not allowed as associated type
     // or as type alias currently.
     type StateStream = StreamMapper<OpState>;
 
