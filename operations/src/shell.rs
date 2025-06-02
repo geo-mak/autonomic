@@ -61,15 +61,15 @@ impl ShellOperation {
                 true if output.stdout.is_empty() => OperationResult::Ok,
                 true => {
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    OperationResult::OkStr(Cow::Owned(stdout))
+                    OperationResult::OkMsg(Cow::Owned(stdout))
                 }
                 false if output.stderr.is_empty() => OperationResult::Err,
                 false => {
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    OperationResult::ErrStr(Cow::Owned(stderr))
+                    OperationResult::ErrMsg(Cow::Owned(stderr))
                 }
             },
-            Err(err) => OperationResult::ErrStr(Cow::Owned(err.to_string())),
+            Err(err) => OperationResult::ErrMsg(Cow::Owned(err.to_string())),
         }
     }
 }
@@ -98,18 +98,18 @@ impl Operation for ShellOperation {
         // Extract parameters
         let params = match parameters {
             Some(params) => params,
-            None => return OperationResult::err_str("Parameters required"),
+            None => return OperationResult::err_msg("Parameters required"),
         };
 
         // Check if the parameters are of the expected type
         let cmd = match params.as_parameters().downcast_ref::<ShellParameters>() {
             Some(value) => value,
-            None => return OperationResult::err_str("Unexpected parameters"),
+            None => return OperationResult::err_msg("Unexpected parameters"),
         };
 
         // Program must be specified
         if cmd.program.is_empty() {
-            return OperationResult::err_str("Program not specified");
+            return OperationResult::err_msg("Program not specified");
         }
 
         // Execute

@@ -32,27 +32,26 @@ pub trait Operation:
     async fn perform(&self, parameters: Option<&dyn OperationParameters>) -> OperationResult;
 }
 
-/// The returned result type of operation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OperationResult {
     Ok,
-    OkStr(Cow<'static, str>),
+    OkMsg(Cow<'static, str>),
     Err,
-    ErrStr(Cow<'static, str>),
+    ErrMsg(Cow<'static, str>),
     Lock(Cow<'static, str>),
 }
 
 impl OperationResult {
-    /// Returns `Self::OkStr(value)` with static string literal.
+    /// Returns `Self::OkMsg(value)` with static string literal.
     #[inline]
-    pub fn ok_str(message: &'static str) -> Self {
-        OperationResult::OkStr(Cow::Borrowed(message))
+    pub fn ok_msg(message: &'static str) -> Self {
+        OperationResult::OkMsg(Cow::Borrowed(message))
     }
 
-    /// Returns `Self::ErrStr(value)` with static string literal.
+    /// Returns `Self::ErrMsg(value)` with static string literal.
     #[inline]
-    pub fn err_str(message: &'static str) -> Self {
-        OperationResult::ErrStr(Cow::Borrowed(message))
+    pub fn err_msg(message: &'static str) -> Self {
+        OperationResult::ErrMsg(Cow::Borrowed(message))
     }
 
     /// Returns `Self::Lock(value)` with static string literal.
@@ -64,13 +63,13 @@ impl OperationResult {
     /// Checks if result is `Ok`.
     #[inline]
     pub fn is_ok(&self) -> bool {
-        matches!(self, OperationResult::Ok | OperationResult::OkStr(_))
+        matches!(self, OperationResult::Ok | OperationResult::OkMsg(_))
     }
 
     /// Checks if result is `Err`.
     #[inline]
     pub fn is_err(&self) -> bool {
-        matches!(self, OperationResult::Err | OperationResult::ErrStr(_))
+        matches!(self, OperationResult::Err | OperationResult::ErrMsg(_))
     }
 
     /// Checks if result is `Lock`.
@@ -84,9 +83,9 @@ impl Display for OperationResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OperationResult::Ok => write!(f, "Ok"),
-            OperationResult::OkStr(val) => write!(f, "Ok: {}", val),
+            OperationResult::OkMsg(val) => write!(f, "Ok: {}", val),
             OperationResult::Err => write!(f, "Error"),
-            OperationResult::ErrStr(err) => write!(f, "Error: {}", err),
+            OperationResult::ErrMsg(err) => write!(f, "Error: {}", err),
             OperationResult::Lock(msg) => write!(f, "Lock: {}", msg),
         }
     }

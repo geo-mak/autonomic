@@ -129,11 +129,11 @@ impl Effector {
                 // Detailed result is not included in events
                 Ok(op_result) => match &op_result {
                     // Expected ok
-                    OperationResult::Ok | OperationResult::OkStr(_) => {
+                    OperationResult::Ok | OperationResult::OkMsg(_) => {
                         trace_info!(source = op_id, message = "Completed: Ok");
                     }
                     // Expected error
-                    OperationResult::Err | OperationResult::ErrStr(_) => {
+                    OperationResult::Err | OperationResult::ErrMsg(_) => {
                         trace_warn!(source = op_id, message = "Completed: Error");
                     }
                     // Locking result
@@ -217,7 +217,7 @@ impl Effector {
                             trace_info!(source = op_id, message = "Completed: Ok");
                             OpState::Ok(None)
                         }
-                        OperationResult::OkStr(msg) => {
+                        OperationResult::OkMsg(msg) => {
                             trace_info!(source = op_id, message = "Completed: Ok");
                             OpState::Ok(Some(msg))
                         }
@@ -226,7 +226,7 @@ impl Effector {
                             trace_warn!(source = op_id, message = "Completed: Error");
                             OpState::Failed(None)
                         }
-                        OperationResult::ErrStr(msg) => {
+                        OperationResult::ErrMsg(msg) => {
                             trace_warn!(source = op_id, message = "Completed: Error");
                             OpState::Failed(Some(msg))
                         }

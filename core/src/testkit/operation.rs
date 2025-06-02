@@ -66,8 +66,8 @@ impl TestOperation {
         }
 
         match mode {
-            RunMode::Ok => OperationResult::ok_str("Result"),
-            RunMode::Err => OperationResult::err_str("Expected Error"),
+            RunMode::Ok => OperationResult::ok_msg("Result"),
+            RunMode::Err => OperationResult::err_msg("Expected Error"),
             RunMode::Panic => {
                 panic!("Unexpected Error")
             }
@@ -100,7 +100,7 @@ impl Operation for TestOperation {
         // Check parameters
         let params_option = if let Some(params) = parameters {
             match params.as_parameters().downcast_ref::<TestRetry>() {
-                None => return OperationResult::err_str("Unexpected parameters"),
+                None => return OperationResult::err_msg("Unexpected parameters"),
                 Some(value) => Some(value),
             }
         } else {
@@ -161,7 +161,7 @@ mod tests {
             None,
         );
         let result = op.perform(None).await;
-        assert_eq!(result, OperationResult::ok_str("Result"));
+        assert_eq!(result, OperationResult::ok_msg("Result"));
     }
 
     #[tokio::test]
@@ -173,7 +173,7 @@ mod tests {
             None,
         );
         let result = op.perform(None).await;
-        assert_eq!(result, OperationResult::err_str("Expected Error"));
+        assert_eq!(result, OperationResult::err_msg("Expected Error"));
     }
 
     #[tokio::test]
@@ -197,6 +197,6 @@ mod tests {
 
         let result = operation.perform(Some(&params)).await;
 
-        assert_eq!(result, OperationResult::err_str("Expected Error"));
+        assert_eq!(result, OperationResult::err_msg("Expected Error"));
     }
 }
