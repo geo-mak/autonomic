@@ -44,18 +44,18 @@ pub trait ControllerService {
     type DeactivateSensorReturn;
 
     /// Returns the information about the operation.
-    fn operation(
+    fn op(
         controller: Self::Controller,
         id: Self::OperationID,
     ) -> impl Future<Output = Result<Self::OperationReturn, Self::ServiceError>> + Send;
 
     /// Returns the information about all operations.
-    fn operations(
+    fn list(
         controller: Self::Controller,
     ) -> impl Future<Output = Result<Self::OperationsReturn, Self::ServiceError>> + Send;
 
     /// Returns the IDs of all active operations.
-    fn active_operations(
+    fn list_active(
         controller: Self::Controller,
     ) -> impl Future<Output = Result<Self::ActiveOperationsReturn, Self::ServiceError>> + Send;
 
@@ -132,20 +132,20 @@ pub trait ControllerClient {
     type StateStream;
 
     /// Retrieves information about the operation.
-    fn operation(
+    fn op(
         &self,
         controller_id: Self::ControllerID,
         operation_id: Self::OperationID,
     ) -> impl Future<Output = Result<Self::OperationInfo, Self::ClientError>> + Send;
 
     /// Retrieves information about all operations.
-    fn operations(
+    fn list(
         &self,
         controller_id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::OperationsInfo, Self::ClientError>> + Send;
 
     /// Retrieves the IDs of all active operations.
-    fn active_operations(
+    fn list_active(
         &self,
         controller_id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::ActiveOperations, Self::ClientError>> + Send;

@@ -114,7 +114,7 @@ impl<'a> OperationController<'a> {
         Err(ControllerError::OpNotFound)
     }
 
-    /// Retrieves info of single operation.
+    /// Retrieves the info of an operation.
     ///
     /// # Parameters
     /// - `id`: The unique identifier of the operation.
@@ -123,7 +123,7 @@ impl<'a> OperationController<'a> {
     /// - `Ok(OperationInfo)`: If the operation is found.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
     /// - `Err(ControllerError::OpNotFound)`: If the operation is not found.
-    pub fn operation(&self, id: &'a str) -> Result<OpInfo, ControllerError> {
+    pub fn op(&self, id: &'a str) -> Result<OpInfo, ControllerError> {
         match self.get(id) {
             Ok(container) => Ok(container.info()),
             Err(e) => Err(e),
@@ -135,7 +135,7 @@ impl<'a> OperationController<'a> {
     /// # Returns
     /// - `Ok(Vec<OperationInfo>)`: If the controller in not empty.
     /// - `Err(ControllerError::Empty)`: If the controller is empty.
-    pub fn operations(&self) -> Result<Vec<OpInfo>, ControllerError> {
+    pub fn list(&self) -> Result<Vec<OpInfo>, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
             return Err(ControllerError::Empty);
@@ -153,7 +153,7 @@ impl<'a> OperationController<'a> {
     /// - `Ok(Vec<&str>)`: If controller is not empty, where `&str` represents the ID of the active operation.
     /// - `Err(ControllerError::Empty)`: If there are no operations in the controller.
     /// - `Err(ControllerError::NoActiveOps)`: If there are no **active** operations in the controller.
-    pub fn active_operations(&self) -> Result<Vec<&'a str>, ControllerError> {
+    pub fn list_active(&self) -> Result<Vec<&'a str>, ControllerError> {
         if self.containers.is_empty() {
             trace_warn!(source = self.id, message = "Empty");
             return Err(ControllerError::Empty);

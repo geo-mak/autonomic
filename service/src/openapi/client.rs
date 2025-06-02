@@ -130,7 +130,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// # Returns
     /// - `Ok(OpInfo)`: If the operation is found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn operation(
+    async fn op(
         &self,
         controller_id: Self::ControllerID,
         operation_id: Self::OperationID,
@@ -155,7 +155,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// # Returns
     /// - `Ok(Vec<OpInfo>)`: If the operations are found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn operations(
+    async fn list(
         &self,
         controller_id: Self::ControllerID,
     ) -> Result<Self::OperationsInfo, Self::ClientError> {
@@ -166,7 +166,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
                 controller_id
             )
         );
-        let url = format!("{}/{}/ops", self.host, controller_id);
+        let url = format!("{}/{}/list", self.host, controller_id);
         let result = self.client.get(&url).send().await;
         Self::match_and_parse_as::<Self::OperationsInfo>(result).await
     }
@@ -179,7 +179,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// # Returns
     /// - `Ok(Vec<String>)`: If active operations are found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn active_operations(
+    async fn list_active(
         &self,
         controller_id: Self::ControllerID,
     ) -> Result<Self::ActiveOperations, Self::ClientError> {
@@ -190,7 +190,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
                 controller_id
             )
         );
-        let url = format!("{}/{}/active_ops", self.host, controller_id);
+        let url = format!("{}/{}/list_active", self.host, controller_id);
         let result = self.client.get(&url).send().await;
         Self::match_and_parse_as::<Self::ActiveOperations>(result).await
     }
@@ -438,7 +438,7 @@ mod tests {
         let api_client = OpenAPIClient::new(client, &host);
 
         let result = api_client
-            .operation(&controller_id, &operation_id)
+            .op(&controller_id, &operation_id)
             .await
             .unwrap();
 
@@ -461,7 +461,7 @@ mod tests {
         let body = serde_json::to_string(&operations_info).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/ops", controller_id).as_str())
+            .mock("GET", format!("/{}/list", controller_id).as_str())
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -469,7 +469,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.operations(controller_id).await.unwrap();
+        let result = api_client.list(controller_id).await.unwrap();
 
         assert_eq!(result, operations_info);
     }
@@ -486,7 +486,7 @@ mod tests {
         let body = r#"["ActiveOperation1", "ActiveOperation2"]"#;
 
         let _m = server
-            .mock("GET", format!("/{}/active_ops", controller_id).as_str())
+            .mock("GET", format!("/{}/list_active", controller_id).as_str())
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -494,7 +494,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.active_operations(controller_id).await.unwrap();
+        let result = api_client.list_active(controller_id).await.unwrap();
 
         assert_eq!(
             result,
@@ -789,7 +789,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.operation(controller_id, op_id).await;
+        let result = api_client.op(controller_id, op_id).await;
 
         assert!(matches!(
             result,
@@ -811,7 +811,7 @@ mod tests {
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/ops", controller_id).as_str())
+            .mock("GET", format!("/{}/list", controller_id).as_str())
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -819,7 +819,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.operations(controller_id).await;
+        let result = api_client.list(controller_id).await;
 
         assert!(matches!(
             result,
@@ -910,7 +910,7 @@ mod tests {
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/active_ops", controller_id).as_str())
+            .mock("GET", format!("/{}/list_active", controller_id).as_str())
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -918,7 +918,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.active_operations(controller_id).await;
+        let result = api_client.list_active(controller_id).await;
 
         assert!(matches!(
             result,

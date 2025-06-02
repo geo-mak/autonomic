@@ -55,15 +55,15 @@ pub fn controller_router(controller: Arc<OperationController<'static>>) -> Route
     Router::new()
         .route(
             &format!("{}/op/:id", base_path),
-            get(OpenAPIEndpoints::operation),
+            get(OpenAPIEndpoints::op),
         )
         .route(
-            &format!("{}/ops", base_path),
-            get(OpenAPIEndpoints::operations),
+            &format!("{}/list", base_path),
+            get(OpenAPIEndpoints::list),
         )
         .route(
-            &format!("{}/active_ops", base_path),
-            get(OpenAPIEndpoints::active_operations),
+            &format!("{}/list_active", base_path),
+            get(OpenAPIEndpoints::list_active),
         )
         .route(
             &format!("{}/activate/:id", base_path),
@@ -156,7 +156,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200` and `Json<OpInfo>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
     /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    async fn operation(
+    async fn op(
         Extension(controller): Self::Controller,
         Path(id): Self::OperationID,
     ) -> Result<Self::OperationReturn, Self::ServiceError> {
@@ -165,7 +165,7 @@ impl ControllerService for OpenAPIEndpoints {
             message = format!("Received HTTP request to get operation={}", id)
         );
         // further data is done in the controller
-        match controller.operation(id.as_str()) {
+        match controller.op(id.as_str()) {
             Ok(op_info) => Ok(Json(op_info)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -179,7 +179,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// # Returns
     /// - Status code `200` and `Json<Vec<OpInfo>>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
-    async fn operations(
+    async fn list(
         Extension(controller): Self::Controller,
     ) -> Result<Self::OperationsReturn, Self::ServiceError> {
         trace_trace!(
@@ -187,7 +187,7 @@ impl ControllerService for OpenAPIEndpoints {
             message = "Received HTTP request to get all operations"
         );
         // further data is done in the controller
-        match controller.operations() {
+        match controller.list() {
             Ok(op_infos) => Ok(Json(op_infos)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -205,14 +205,14 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200` and `Json<Vec<String>>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::NoActiveOps>` as body: If the controller is empty.
-    async fn active_operations(
+    async fn list_active(
         Extension(controller): Self::Controller,
     ) -> Result<Self::ActiveOperationsReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = "Received HTTP request to get all active operations"
         );
-        match controller.active_operations() {
+        match controller.list_active() {
             Ok(ops) => Ok(Json(ops)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -542,7 +542,7 @@ mod tests {
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/ops")
+                    .uri("/test_controller/list")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -600,7 +600,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/active_ops")
+                    .uri("/test_controller/list_active")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -624,7 +624,7 @@ mod tests {
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/active_ops")
+                    .uri("/test_controller/list_active")
                     .body(Body::empty())
                     .unwrap(),
             )
