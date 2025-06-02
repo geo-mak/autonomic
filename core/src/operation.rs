@@ -263,7 +263,7 @@ impl Display for OpInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "OperationInfo {{ id: {}, description: {}, active: {}, locked: {}, active_sensor: {} }}",
+            "{}, {}, {}, {}, {}",
             self.id, self.description, self.active, self.locked, self.active_sensor
         )
     }
