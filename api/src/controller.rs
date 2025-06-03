@@ -10,13 +10,13 @@ pub trait ControllerService {
     /// The type of the operation ID or the required wrapper around it.
     type OperationID;
 
-    /// The type of the result returned when calling the `operation` method.
+    /// The type of the result returned when calling the `op` method.
     type OperationReturn;
 
-    /// The type of the result returned when calling the `operations` method.
+    /// The type of the result returned when calling the `list` method.
     type OperationsReturn;
 
-    /// The type of the result returned when calling the `active_operations` method.
+    /// The type of the result returned when calling the `list_active` method.
     type ActiveOperationsReturn;
 
     /// The type of the parameters or wrappers around parameters for methods `activate` and `activate_stream`.
