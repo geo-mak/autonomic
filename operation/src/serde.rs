@@ -35,38 +35,24 @@ lazy_static! {
 pub struct DeserializeRegistry;
 
 impl DeserializeRegistry {
-    /// Registers a type to be deserializable.
-    /// This function adds the type's deserialization function to the deserialization table.
+    /// Registers a type to be dynamically deserializable.
     pub fn register<T>() -> &'static str
     where
         T: GenericSerializable + for<'de> Deserialize<'de>,
     {
-        let type_name = type_name::<T>();
+        let id = type_name::<T>();
 
-        // Check if type is already registered to avoid locking
-        {
-            let read_lock = DESERIALIZE_TABLE
-                .read()
-                .expect("Failed to acquire read lock");
-            if read_lock.contains_key(&type_name) {
-                return type_name;
-            }
-        }
-
-        // Typed deserialization function
         let deserialize_fn: DeserializeFn =
             |s| Box::new(serde_json::from_slice::<T>(s).expect("Failed to deserialize"));
 
-        // Lock access and register type
         {
             let mut write_lock = DESERIALIZE_TABLE
                 .write()
                 .expect("Failed to acquire write lock");
-            write_lock.insert(type_name, deserialize_fn);
+            write_lock.insert(id, deserialize_fn);
         }
 
-        // Return type name
-        type_name
+        id
     }
 
     #[inline]
@@ -84,12 +70,14 @@ impl DeserializeRegistry {
     }
 }
 
-/// Unique safe pointer with metadata about the heap-allocated data it owns.
-/// Designed as a wrapper around any serializable type that can be serialized and deserialized.
+/// Unique safe pointer with metadata about its type's data.
+/// It is designed as a type erasure wrapper around any serializable type that can be serialized and deserialized.
 ///
-/// Base size: `40 bytes` on `64 bit` systems.
+/// # Metadata Stability
+/// The metadata (type identifier) is stable as long as all parties exchanging data use the same version of the codebase.
+/// If the type definitions or crate versions change between parties, the metadata may become incompatible.
 pub struct AnySerializable {
-    type_name: Cow<'static, str>,
+    id: Cow<'static, str>,
     data: Box<dyn GenericSerializable>,
 }
 
@@ -103,7 +91,7 @@ impl AnySerializable {
         T: GenericSerializable + for<'de> Deserialize<'de>,
     {
         AnySerializable {
-            type_name: Cow::Borrowed(type_name::<T>()),
+            id: Cow::Borrowed(type_name::<T>()),
             data: Box::new(value),
         }
     }
@@ -117,7 +105,7 @@ impl AnySerializable {
         T: GenericSerializable + for<'de> Deserialize<'de>,
     {
         AnySerializable {
-            type_name: Cow::Borrowed(DeserializeRegistry::register::<T>()),
+            id: Cow::Borrowed(DeserializeRegistry::register::<T>()),
             data: Box::new(value),
         }
     }
@@ -136,7 +124,7 @@ impl Serialize for AnySerializable {
     {
         let serialized_data = self.data.serialize().map_err(serde::ser::Error::custom)?;
         let mut state = serializer.serialize_struct("AnySerializable", 2)?;
-        state.serialize_field("type_name", &self.type_name)?;
+        state.serialize_field("id", &self.id)?;
         state.serialize_field("data", &serialized_data)?;
         state.end()
     }
@@ -145,7 +133,7 @@ impl Serialize for AnySerializable {
 impl Clone for AnySerializable {
     fn clone(&self) -> Self {
         AnySerializable {
-            type_name: self.type_name.clone(),
+            id: self.id.clone(),
             data: self.data.clone_boxed(),
         }
     }
@@ -153,7 +141,7 @@ impl Clone for AnySerializable {
 
 impl PartialEq for AnySerializable {
     fn eq(&self, other: &Self) -> bool {
-        if self.type_name != other.type_name {
+        if self.id != other.id {
             return false;
         }
         self.data.serialize() == other.data.serialize()
@@ -164,8 +152,8 @@ impl Debug for AnySerializable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "AnySerializable {{ type_name: {}, data: {:?} }}",
-            self.type_name, self.data
+            "AnySerializable {{ id: {}, data: {:?} }}",
+            self.id, self.data
         )
     }
 }
@@ -190,16 +178,16 @@ impl<'de> Visitor<'de> for AnySerializableVisitor {
     where
         M: de::MapAccess<'de>,
     {
-        let mut type_name: Option<Cow<'static, str>> = None;
+        let mut id: Option<Cow<'static, str>> = None;
         let mut data: Option<Vec<u8>> = None;
 
         while let Some(key) = map.next_key()? {
             match key {
-                "type_name" => {
-                    if type_name.is_some() {
-                        return Err(Error::duplicate_field("type_name"));
+                "id" => {
+                    if id.is_some() {
+                        return Err(Error::duplicate_field("id"));
                     }
-                    type_name = Some(map.next_value()?);
+                    id = Some(map.next_value()?);
                 }
                 "data" => {
                     if data.is_some() {
@@ -208,18 +196,17 @@ impl<'de> Visitor<'de> for AnySerializableVisitor {
                     data = Some(map.next_value()?);
                 }
                 _ => {
-                    return Err(Error::unknown_field(key, &["type_name", "data"]));
+                    return Err(Error::unknown_field(key, &["id", "data"]));
                 }
             }
         }
 
-        let type_name: Cow<'static, str> =
-            type_name.ok_or_else(|| Error::missing_field("type_name"))?;
+        let id: Cow<'static, str> = id.ok_or_else(|| Error::missing_field("id"))?;
 
         let data: Vec<u8> = data.ok_or_else(|| Error::missing_field("data"))?;
 
-        match DeserializeRegistry::deserialize(&type_name, &data) {
-            Ok(data) => Ok(AnySerializable { type_name, data }),
+        match DeserializeRegistry::deserialize(&id, &data) {
+            Ok(data) => Ok(AnySerializable { id, data }),
             Err(e) => Err(Error::custom(e)),
         }
     }
@@ -230,11 +217,7 @@ impl<'de> Deserialize<'de> for AnySerializable {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_struct(
-            "AnySerializable",
-            &["type_name", "data"],
-            AnySerializableVisitor,
-        )
+        deserializer.deserialize_struct("AnySerializable", &["id", "data"], AnySerializableVisitor)
     }
 }
 
