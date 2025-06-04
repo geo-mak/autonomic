@@ -1,6 +1,6 @@
 use autonomic_operation::serde::AnySerializable;
 
-#[cfg(feature = "tests")]
+#[cfg(feature = "testkit")]
 use autonomic_operation::testkit::params::TestRetry;
 
 use criterion::{Criterion, criterion_group, criterion_main};

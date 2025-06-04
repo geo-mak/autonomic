@@ -10,7 +10,7 @@ pub mod serde;
 pub mod traits;
 
 
-#[cfg(feature = "tests")]
+#[cfg(feature = "testkit")]
 pub mod testkit;
 
 // Private

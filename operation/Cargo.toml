@@ -6,10 +6,10 @@ edition = "2024"
 [[bench]]
 name = "benchmarks"
 harness = false
-required-features = ["tests"]
+required-features = ["testkit"]
 
 [features]
-tests = ["tracing", "tracing-subscriber/env-filter"]
+testkit = ["tracing", "tracing-subscriber/env-filter"]
 
 [dev-dependencies]
 criterion = "0.6.0"
