@@ -9,7 +9,7 @@ use autonomic_core::operation::{OpInfo, OpState};
 use autonomic_core::serde::AnySerializable;
 use autonomic_core::trace_trace;
 
-use autonomic_api::controller::ControllerClient;
+use autonomic_api::operation::OperationClient;
 
 /// Error type for the OpenAPIClient.
 #[derive(Debug)]
@@ -108,7 +108,7 @@ impl<'a> OpenAPIClient<'a> {
     }
 }
 
-impl<'a> ControllerClient for OpenAPIClient<'a> {
+impl<'a> OperationClient for OpenAPIClient<'a> {
     type ClientError = OpenAPIClientError;
     type ControllerID = &'a str;
     type OperationID = &'a str;
@@ -437,10 +437,7 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let result = api_client
-            .op(&controller_id, &operation_id)
-            .await
-            .unwrap();
+        let result = api_client.op(&controller_id, &operation_id).await.unwrap();
 
         assert_eq!(result, operation_info);
     }

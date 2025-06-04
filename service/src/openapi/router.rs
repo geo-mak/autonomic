@@ -21,9 +21,9 @@ use autonomic_core::serde::AnySerializable;
 use autonomic_core::trace_trace;
 use autonomic_core::traits::Identity;
 
-use autonomic_api::controller::ControllerService;
+use autonomic_api::operation::OperationService;
 
-/// Creates a router instance with endpoints related to the controller service.
+/// Creates a router instance with endpoints related to the operation service.
 ///
 /// # Parameters
 /// - `controller`: The operation controller instance.
@@ -53,14 +53,8 @@ use autonomic_api::controller::ControllerService;
 pub fn controller_router(controller: Arc<OperationController<'static>>) -> Router {
     let base_path = { format!("/{}", controller.id()) };
     Router::new()
-        .route(
-            &format!("{}/op/:id", base_path),
-            get(OpenAPIEndpoints::op),
-        )
-        .route(
-            &format!("{}/list", base_path),
-            get(OpenAPIEndpoints::list),
-        )
+        .route(&format!("{}/op/:id", base_path), get(OpenAPIEndpoints::op))
+        .route(&format!("{}/list", base_path), get(OpenAPIEndpoints::list))
         .route(
             &format!("{}/list_active", base_path),
             get(OpenAPIEndpoints::list_active),
@@ -128,7 +122,7 @@ const SERVICE_LABEL: &'static str = "OpenAPIService";
 
 struct OpenAPIEndpoints;
 
-impl ControllerService for OpenAPIEndpoints {
+impl OperationService for OpenAPIEndpoints {
     // **Note**: We use `Arc` because `Extension` clones the value on each request.
     // Making the controller static can be a better option.
     type Controller = Extension<Arc<OperationController<'static>>>;
