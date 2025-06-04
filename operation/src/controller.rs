@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::wrappers::WatchStream;
 
+use autonomic_events::trace_warn;
+
 use crate::container::OperationContainer;
 use crate::errors::ControllerError;
 use crate::operation::{OpInfo, OpState, Operation, OperationParameters};
 use crate::sensor::Sensor;
 use crate::serde::{DeserializeRegistry, GenericSerializable};
-use crate::trace_warn;
 use crate::traits::{Identity, IntoArc};
 
 /// Operation controller is responsible for managing access to operations and activating them.

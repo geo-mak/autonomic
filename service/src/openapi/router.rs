@@ -14,14 +14,15 @@ use axum::{
     routing::{get, post},
 };
 
+use autonomic_events::trace_trace;
+
+use autonomic_api::operation::OperationService;
+
 use autonomic_operation::controller::OperationController;
 use autonomic_operation::errors::{ActivationError, ControllerError};
 use autonomic_operation::operation::{OpInfo, OpState};
 use autonomic_operation::serde::AnySerializable;
-use autonomic_operation::trace_trace;
 use autonomic_operation::traits::Identity;
-
-use autonomic_api::operation::OperationService;
 
 /// Creates a router instance with endpoints related to the operation service.
 ///

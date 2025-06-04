@@ -3,12 +3,13 @@ use std::sync::Arc;
 
 use tokio::sync::watch::Receiver;
 
+use autonomic_events::{trace_error, trace_trace, trace_warn};
+
 use crate::effector::Effector;
 use crate::errors::ActivationError;
 use crate::operation::{OpInfo, OpState, Operation, OperationParameters};
 use crate::sensor::Sensor;
 use crate::traits::{IntoArc, IntoBox};
-use crate::{trace_error, trace_trace, trace_warn};
 
 pub(super) struct OperationContainer {
     effector: Arc<Effector>,

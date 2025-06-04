@@ -19,7 +19,7 @@ use tracing_subscriber::layer::Context;
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
 use crate::traits::{EventRecorder, EventWriter, FileExtension, FileStoreFormat};
-use autonomic_operation::trace_error;
+use crate::trace_error;
 
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.
@@ -376,7 +376,7 @@ mod tests {
     use csv::ReaderBuilder;
     use serde_json::Value;
 
-    use autonomic_operation::{trace_error, trace_info};
+    use crate::{trace_error, trace_info};
 
     #[tokio::test]
     async fn test_buffered_store_write_csv() {

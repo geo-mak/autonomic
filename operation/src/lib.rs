@@ -9,8 +9,6 @@ pub mod sensor;
 pub mod serde;
 pub mod traits;
 
-#[macro_use]
-pub mod tracing;
 
 #[cfg(feature = "tests")]
 pub mod testkit;

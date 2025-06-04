@@ -4,12 +4,13 @@ use std::marker::PhantomData;
 use futures_util::StreamExt;
 use tokio_stream::Stream;
 
+use autonomic_events::trace_trace;
+
+use autonomic_api::operation::OperationClient;
+
 use autonomic_operation::errors::ControllerError;
 use autonomic_operation::operation::{OpInfo, OpState};
 use autonomic_operation::serde::AnySerializable;
-use autonomic_operation::trace_trace;
-
-use autonomic_api::operation::OperationClient;
 
 /// Error type for the OpenAPIClient.
 #[derive(Debug)]

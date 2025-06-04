@@ -6,10 +6,11 @@ use tokio::sync::Notify;
 
 use async_trait::async_trait;
 
+use autonomic_events::{trace_error, trace_info};
+
 use crate::effector::Effector;
 use crate::operation::OperationParameters;
 use crate::traits::IntoSensor;
-use crate::{trace_error, trace_info};
 
 /// Trait for activation conditions.
 /// Condition is a suspension event that prevents `activate` method from returning until the condition is met.

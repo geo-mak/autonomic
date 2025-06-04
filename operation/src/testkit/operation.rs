@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use autonomic_events::trace_info;
+
 use crate::operation::{Operation, OperationParameters, OperationResult};
 use crate::testkit::params::TestRetry;
-use crate::trace_info;
 use crate::traits::{Describe, Identity};
 
 enum RunMode {

@@ -5,8 +5,9 @@ use tokio::sync::watch::Receiver;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinError;
 
+use autonomic_events::{trace_error, trace_info, trace_warn};
+
 use crate::operation::{OpState, Operation, OperationParameters, OperationResult};
-use crate::{trace_error, trace_info, trace_warn};
 
 struct EffectorData {
     operation: Box<dyn Operation>,

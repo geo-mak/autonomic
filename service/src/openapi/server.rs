@@ -6,7 +6,7 @@ use axum::Router;
 
 use tokio::sync::Notify;
 
-use autonomic_operation::{trace_error, trace_trace};
+use autonomic_events::{trace_error, trace_trace};
 
 #[cfg(feature = "openapi-server-tls")]
 use axum_server::tls_rustls::RustlsConfig;
