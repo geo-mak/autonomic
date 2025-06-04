@@ -5,5 +5,5 @@ edition = "2024"
 description = "The public API definition of the autonomic components"
 
 [dependencies]
-autonomic_core.workspace = true
+autonomic_operation.workspace = true
 futures-util.workspace = true

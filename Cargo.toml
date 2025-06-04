@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "api",
-    "core",
+    "operation",
     "service",
     "events",
     "operations",
@@ -19,7 +19,7 @@ readme = "README.MD"
 repository = "https://github.com/geo-mak/autonomic"
 
 [workspace.dependencies]
-autonomic_core = { path = "core" }
+autonomic_operation = { path = "operation" }
 autonomic_api = { path = "api" }
 
 lazy_static = "1.5.0"

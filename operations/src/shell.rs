@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use autonomic_core::operation::{Operation, OperationParameters, OperationResult};
-use autonomic_core::trace_info;
-use autonomic_core::traits::{Describe, Identity};
+use autonomic_operation::operation::{Operation, OperationParameters, OperationResult};
+use autonomic_operation::trace_info;
+use autonomic_operation::traits::{Describe, Identity};
 
 use crate::parameters::Retry;
 
@@ -142,7 +142,7 @@ impl Operation for ShellOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use autonomic_core::testkit::tracing::init_tracing;
+    use autonomic_operation::testkit::tracing::init_tracing;
 
     #[tokio::test]
     async fn test_basic_command_execution() {

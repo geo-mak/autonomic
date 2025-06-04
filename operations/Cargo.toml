@@ -7,7 +7,7 @@ edition = "2024"
 tokio = { workspace = true, features = ["fs"] }
 
 [dependencies]
-autonomic_core = { workspace = true , features = ["tests"] }
+autonomic_operation = { workspace = true , features = ["tests"] }
 
 async-trait.workspace = true
 chrono.workspace = true

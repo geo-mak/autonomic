@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dev-dependencies]
-autonomic_core = { workspace = true, features = ["tests"]}
+autonomic_operation = { workspace = true, features = ["tests"]}
 tower = {version = "0.5.2", features = ["futures-util"]}
 mockito = "1.7.0"
 
 [dependencies]
-autonomic_core.workspace = true
+autonomic_operation.workspace = true
 autonomic_api.workspace = true
 
 tracing.workspace = true

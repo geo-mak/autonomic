@@ -14,12 +14,12 @@ use axum::{
     routing::{get, post},
 };
 
-use autonomic_core::controller::OperationController;
-use autonomic_core::errors::{ActivationError, ControllerError};
-use autonomic_core::operation::{OpInfo, OpState};
-use autonomic_core::serde::AnySerializable;
-use autonomic_core::trace_trace;
-use autonomic_core::traits::Identity;
+use autonomic_operation::controller::OperationController;
+use autonomic_operation::errors::{ActivationError, ControllerError};
+use autonomic_operation::operation::{OpInfo, OpState};
+use autonomic_operation::serde::AnySerializable;
+use autonomic_operation::trace_trace;
+use autonomic_operation::traits::Identity;
 
 use autonomic_api::operation::OperationService;
 
@@ -434,14 +434,14 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
 
-    use autonomic_core::controller::OperationController;
-    use autonomic_core::operation::OpState;
-    use autonomic_core::traits::{Describe, Identity, IntoArc, IntoSensor};
+    use autonomic_operation::controller::OperationController;
+    use autonomic_operation::operation::OpState;
+    use autonomic_operation::traits::{Describe, Identity, IntoArc, IntoSensor};
 
-    use autonomic_core::testkit::conditions::TestIntervalCondition;
-    use autonomic_core::testkit::operation::TestOperation;
-    use autonomic_core::testkit::params::TestRetry;
-    use autonomic_core::testkit::tracing::init_tracing;
+    use autonomic_operation::testkit::conditions::TestIntervalCondition;
+    use autonomic_operation::testkit::operation::TestOperation;
+    use autonomic_operation::testkit::params::TestRetry;
+    use autonomic_operation::testkit::tracing::init_tracing;
 
     #[tokio::test]
     async fn test_fallback() {

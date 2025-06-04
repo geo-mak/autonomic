@@ -1,5 +1,4 @@
-/// Service trait for a operation-service.
-/// The service provides methods for interacting with the operation controller.
+/// This trait defines methods for implementing an operation service.
 pub trait OperationService {
     /// The controller type or the required wrapper around it as a service dependency.
     type Controller;
@@ -104,7 +103,7 @@ pub trait OperationService {
     ) -> impl Future<Output = Result<Self::DeactivateSensorReturn, Self::ServiceError>> + Send;
 }
 
-/// Client trait for interacting with the operation-service.
+/// Client trait for interacting with an operation service.
 pub trait OperationClient {
     /// The type of the client error.
     /// It must take into account the service error type and any additional client-specific errors.

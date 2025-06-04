@@ -169,7 +169,7 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use crate::record::DefaultEvent;
-    use autonomic_core::{trace_error, trace_info};
+    use autonomic_operation::{trace_error, trace_info};
 
     #[tokio::test]
     async fn test_publisher_publish_stop_on_error() {

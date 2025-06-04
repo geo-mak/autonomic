@@ -4,10 +4,10 @@ use std::marker::PhantomData;
 use futures_util::StreamExt;
 use tokio_stream::Stream;
 
-use autonomic_core::errors::ControllerError;
-use autonomic_core::operation::{OpInfo, OpState};
-use autonomic_core::serde::AnySerializable;
-use autonomic_core::trace_trace;
+use autonomic_operation::errors::ControllerError;
+use autonomic_operation::operation::{OpInfo, OpState};
+use autonomic_operation::serde::AnySerializable;
+use autonomic_operation::trace_trace;
 
 use autonomic_api::operation::OperationClient;
 
@@ -406,9 +406,9 @@ mod tests {
     use mockito::{Server, ServerOpts};
     use reqwest::ClientBuilder;
 
-    use autonomic_core::errors::{ActivationError, ControllerError};
-    use autonomic_core::operation::OpState;
-    use autonomic_core::testkit::params::TestRetry;
+    use autonomic_operation::errors::{ActivationError, ControllerError};
+    use autonomic_operation::operation::OpState;
+    use autonomic_operation::testkit::params::TestRetry;
 
     // --------------------------- Ok Tests ---------------------------
     #[tokio::test]

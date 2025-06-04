@@ -1,7 +1,7 @@
-use autonomic_core::serde::AnySerializable;
+use autonomic_operation::serde::AnySerializable;
 
 #[cfg(feature = "tests")]
-use autonomic_core::testkit::params::TestRetry;
+use autonomic_operation::testkit::params::TestRetry;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;

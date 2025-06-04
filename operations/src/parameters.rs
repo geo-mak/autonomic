@@ -2,7 +2,7 @@ use std::any::Any;
 
 use serde::{Deserialize, Serialize};
 
-use autonomic_core::operation::OperationParameters;
+use autonomic_operation::operation::OperationParameters;
 
 /// Common parameters shared between operations
 
