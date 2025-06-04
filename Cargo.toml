@@ -4,7 +4,6 @@ members = [
     "operation",
     "service",
     "events",
-    "operations",
 ]
 
 resolver = "3"
