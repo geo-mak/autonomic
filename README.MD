@@ -23,55 +23,20 @@ layers to decentralized embedded control elements.
 > - The current implementation "tactically" uses a set of dependencies as scaffolding, but ultimately many of these will be replaced by custom solutions and internal protocols to minimize indirections and reduce the levels of abstraction that naturally reduce runtime efficiency.
 
 ### Implementation Highlights:
-Autonomic consists of multiple crates that can be used to build unified control planes.
+Autonomic consists of multiple components that can be used to build unified control planes.
 
-### Core Crate
-The core crate has the following main components:
+The related components are organized into logical packages, each grouping together functionality that serves a specific purpose 
+within the control plane.
 
-* Operation: Operations are the core abstractions that define **concurrent** and **independent** **execution contexts**
-with metadata and execution logic.<br>
-Operations are defined by implementing the `Operation` trait, and they support **dynamic runtime parameters** and can <br>
-be activated with **different values** each time.<br>
-It is up to the operation to decide how to handle the parameters, which can be **ignored** or **rejected** with an <br>
-error message.<br><br>
+The system exposes a public control API defined by a traits for interacting with its components, leaving the implementation 
+details of it to the concrete implementations of API services.
 
-* Controller: An API that manages access to operations on its node. It acts as a registry and namespace for a <br>
-set of operations.<br> When an operation is submitted to the controller, it is assigned a container instance.<br><br>
+Components have their own internal model of compositionality. Many components may run as separate processes, communicating via an internal IPC protocol. This internal model is not part of the public API, so changes to it do not affect external systems or 
+consumers of the public interfaces.
 
-* Container: Encapsulates the operation and controls its associated components.<br>
-Containers are private and managed internally by the system.<br><br>
-
-* Effector: The controlling wrapper around operations inside the container, and it is responsible for the activation <br>
-and state management of operations. Effectors are private and managed internally by the system.<br><br>
-
-* Sensor: An observer that encapsulates an activation condition.<br>
-Activation conditions are types that determine when an operation should be activated, and they are defined by <br>
-implementing the `ActivationCondition` trait, which allow unconstrained definition of conditions.<br><br>
-
-* Data: Lightweight persistence component that defines standard APIs to persist and query data.<br>
-**Note**: Data component is not public yet.<br><br>
-
-* Tracing: Types and macros to support structured tracing of events.<br><br>
-
-### Other Crates:
-
-The current public crates are:
-
-* API: traits that define the public control APIs (syscalls) of various components.<br><br>
-
-* Service: Concrete implementations of services and other components.<br>
-Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client <br>
-components, which was originally intended for testing since it is the easiest to change.<br>
-The gRPC service implementation is considered, but it is not a priority.<br><br>
-
-* Events: Tracing and monitoring APIs that allow systematic storage and retrieval of events with a set of layers and <br>
-services.<br><br>
-
-* Operations (only **demonstrative** at this stage): Pre-defined operations for common use-cases.<br><br>
-
-* Conditions (only **demonstrative** at this stage): Pre-defined set of conditions for common use-cases.<br><br>
+Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client components, which was originally intended for testing since it is the easiest to change.
+The gRPC service implementation is considered, but it is not a priority.
 
 Areas of further work:
-* Evolving the core design.
+* Evolving the core design and the compositionality model.
 * CLI and management tools for the client.
-* Data component.
