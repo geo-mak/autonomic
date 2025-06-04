@@ -50,7 +50,7 @@ use autonomic_api::operation::OperationService;
 ///
 /// # Returns
 /// A `Router` contains endpoints related to the controller service.
-pub fn controller_router(controller: Arc<OperationController<'static>>) -> Router {
+pub fn operation_router(controller: Arc<OperationController<'static>>) -> Router {
     let base_path = { format!("/{}", controller.id()) };
     Router::new()
         .route(&format!("{}/op/:id", base_path), get(OpenAPIEndpoints::op))
@@ -448,7 +448,7 @@ mod tests {
         init_tracing();
         let controller = OperationController::new("test_controller");
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router
             .oneshot(
@@ -485,7 +485,7 @@ mod tests {
 
         controller.submit(operation, None);
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let request = Request::builder()
             .uri(format!("/test_controller/op/{}", operation_id))
@@ -531,7 +531,7 @@ mod tests {
         controller.submit(operation_2, None);
         controller.submit(operation_3, None);
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router
             .oneshot(
@@ -587,7 +587,7 @@ mod tests {
         controller.submit(inactive_operation, None);
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         // Test when no operations are active
         let response = router
@@ -651,7 +651,7 @@ mod tests {
 
         controller.submit(operation, None);
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router
             .oneshot(
@@ -683,7 +683,7 @@ mod tests {
 
         let params_json = serde_json::to_string(&Some(params)).unwrap();
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router
             .oneshot(
@@ -711,7 +711,7 @@ mod tests {
 
         controller.submit(operation, None);
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router
             .oneshot(
@@ -779,7 +779,7 @@ mod tests {
             .body(Body::from(params_json))
             .unwrap();
 
-        let router = controller_router(controller.into_arc());
+        let router = operation_router(controller.into_arc());
 
         let response = router.oneshot(request).await.unwrap();
 
@@ -842,7 +842,7 @@ mod tests {
         assert!(controller.is_active(&operation_id).unwrap());
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         // Abort request
         let response = router
@@ -878,7 +878,7 @@ mod tests {
         controller.submit(operation, None);
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         // Lock request
         let response = router
@@ -914,7 +914,7 @@ mod tests {
         controller.lock(operation_id).unwrap();
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         // Unlock request
         let response = router
@@ -950,7 +950,7 @@ mod tests {
         controller.submit(operation, Some(sensor));
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         let response = &router
             .oneshot(
@@ -998,7 +998,7 @@ mod tests {
         assert!(controller.is_sensor_active(&operation_id).unwrap());
 
         let controller_ref = controller.into_arc();
-        let router = controller_router(controller_ref.clone());
+        let router = operation_router(controller_ref.clone());
 
         let response = &router
             .oneshot(
