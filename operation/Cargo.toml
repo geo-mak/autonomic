@@ -8,17 +8,12 @@ name = "benchmarks"
 harness = false
 required-features = ["testkit"]
 
-[features]
-testkit = ["tracing-subscriber/env-filter"]
-
 [dev-dependencies]
 criterion = "0.6.0"
 
 [dependencies]
 autonomic_events = { workspace = true }
-
 tracing.workspace = true
-tracing-subscriber = { workspace = true, optional = true }
 
 lazy_static.workspace = true
 
@@ -29,3 +24,8 @@ async-trait.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
+
+tracing-subscriber = { workspace = true, optional = true }
+
+[features]
+testkit = ["tracing-subscriber/env-filter"]
