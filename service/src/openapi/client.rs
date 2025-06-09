@@ -1,16 +1,16 @@
-use reqwest::{Client, Error, Response};
 use std::marker::PhantomData;
+
+use reqwest::{Client, Error, Response};
 
 use futures_util::StreamExt;
 use tokio_stream::Stream;
 
 use autonomic_events::trace_trace;
 
-use autonomic_api::operation::OperationClient;
+use autonomic_api::controller::ControllerClient;
 
-use autonomic_operation::errors::ControllerError;
-use autonomic_operation::operation::{OpInfo, OpState};
-use autonomic_operation::serde::AnySerializable;
+use autonomic_controllers::controller::{ControllerInfo, OpState};
+use autonomic_controllers::errors::ControllerError;
 
 /// Error type for the OpenAPIClient.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ where
             let event_str = std::str::from_utf8(&event_bytes)
                 .expect("Failed to convert event's bytes to string");
             let state_str = event_str.trim_start_matches("data: ");
-            serde_json::from_str::<T>(&state_str).expect("Failed to deserialize event as `T`")
+            serde_json::from_str::<T>(state_str).expect("Failed to deserialize event as `T`")
         })
     }
 }
@@ -109,149 +109,83 @@ impl<'a> OpenAPIClient<'a> {
     }
 }
 
-impl<'a> OperationClient for OpenAPIClient<'a> {
+impl<'a> ControllerClient for OpenAPIClient<'a> {
     type ClientError = OpenAPIClientError;
     type ControllerID = &'a str;
-    type OperationID = &'a str;
-    type OperationInfo = OpInfo;
-    type OperationsInfo = Vec<OpInfo>;
-    type ActiveOperations = Vec<String>;
-    type ActivationParams = Option<&'a AnySerializable>;
+    type ControllerInfo = ControllerInfo;
+    type ControllersInfo = Vec<ControllerInfo>;
+    type PerformingControllers = Vec<String>;
 
     // Stream is always returned as opaque type (impl Stream), which is not allowed as associated type
     // or as type alias currently.
-    type StateStream = StreamMapper<OpState>;
+    type PerformReturn = StreamMapper<OpState>;
 
-    /// Retrieves a specific operation by its ID.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
+    /// Retrieves a specific controller by its ID.
     ///
     /// # Returns
-    /// - `Ok(OpInfo)`: If the operation is found.
+    /// - `Ok(ControllerInfo)`: If the controller is found.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn op(
+    async fn ctrl(
         &self,
         controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-    ) -> Result<Self::OperationInfo, Self::ClientError> {
+    ) -> Result<Self::ControllerInfo, Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
-            message = format!(
-                "Sending HTTP request to get operation={} for controller={}",
-                operation_id, controller_id
-            )
+            message = format!("Sending HTTP request to get controller {}", controller_id)
         );
-        let url = format!("{}/{}/op/{}", self.host, controller_id, operation_id);
+        let url = format!("{}/ctrl_mgr/ctrl/{}", self.host, controller_id);
         let result = self.client.get(&url).send().await;
-        Self::match_and_parse_as::<Self::OperationInfo>(result).await
+        Self::match_and_parse_as::<Self::ControllerInfo>(result).await
     }
 
-    /// Retrieves all operations for a specific controller.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
+    /// Retrieves all controllers.
     ///
     /// # Returns
-    /// - `Ok(Vec<OpInfo>)`: If the operations are found.
+    /// - `Ok(Vec<ControllerInfo>)`: If controllers are available.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn list(
-        &self,
-        controller_id: Self::ControllerID,
-    ) -> Result<Self::OperationsInfo, Self::ClientError> {
+    async fn list(&self) -> Result<Self::ControllersInfo, Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
-            message = format!(
-                "Sending HTTP request to get all operations for controller={}",
-                controller_id
-            )
+            message = format!("Sending HTTP request to get all controllers")
         );
-        let url = format!("{}/{}/list", self.host, controller_id);
+        let url = format!("{}/ctrl_mgr/list", self.host);
         let result = self.client.get(&url).send().await;
-        Self::match_and_parse_as::<Self::OperationsInfo>(result).await
+        Self::match_and_parse_as::<Self::ControllersInfo>(result).await
     }
 
-    /// Retrieves the currently active operations for a specific controller.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
+    /// Retrieves the controllers with currently active operations.
     ///
     /// # Returns
-    /// - `Ok(Vec<String>)`: If active operations are found.
+    /// - `Ok(Vec<String>)`: If there were matches.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn list_active(
-        &self,
-        controller_id: Self::ControllerID,
-    ) -> Result<Self::ActiveOperations, Self::ClientError> {
+    async fn list_performing(&self) -> Result<Self::PerformingControllers, Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
-            message = format!(
-                "Sending HTTP request to get active operations for controller={}",
-                controller_id
-            )
+            message = format!("Sending HTTP request to get controllers with active operations")
         );
-        let url = format!("{}/{}/list_active", self.host, controller_id);
+        let url = format!("{}/ctrl_mgr/list_performing", self.host);
         let result = self.client.get(&url).send().await;
-        Self::match_and_parse_as::<Self::ActiveOperations>(result).await
+        Self::match_and_parse_as::<Self::PerformingControllers>(result).await
     }
 
-    /// Activates a specific operation without streaming its state updates.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
-    /// - `params`: An optional reference to the operation parameters.
-    ///
-    /// # Returns
-    /// - `Ok(())`: If the operation is successfully activated.
-    /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn activate(
-        &self,
-        controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-        params: Self::ActivationParams,
-    ) -> Result<(), Self::ClientError> {
-        trace_trace!(
-            source = Self::CLIENT_LABEL,
-            message = format!(
-                "Sending HTTP request to activate operation={} for controller={}",
-                operation_id, controller_id
-            )
-        );
-        let url = format!("{}/{}/activate/{}", self.host, controller_id, operation_id);
-        let result = self.client.post(&url).json(&params).send().await;
-        Self::match_ok(result).await
-    }
-
-    /// Activates a specific operation and returns a stream of its state updates.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
-    /// - `params`: An optional reference to the operation parameters.
+    /// Activates the operation of a controller. and returns a stream of its state updates.
     ///
     /// # Returns
     /// - `Ok(impl Stream<Item = OperationState>)`: If the operation is successfully started.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn activate_stream(
+    async fn perform(
         &self,
         controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-        params: Self::ActivationParams,
-    ) -> Result<Self::StateStream, Self::ClientError> {
+    ) -> Result<Self::PerformReturn, Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to activate operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to start the control operation of the controller {}",
+                controller_id
             )
         );
-        let url = format!(
-            "{}/{}/activate_stream/{}",
-            self.host, controller_id, operation_id
-        );
-        let result = self.client.post(&url).json(&params).send().await;
+        let url = format!("{}/ctrl_mgr/perform/{}", self.host, controller_id);
+        let result = self.client.post(&url).send().await;
         Self::match_request_result(result, async |response: Response| StreamMapper {
             response,
             _t: PhantomData,
@@ -259,142 +193,103 @@ impl<'a> OperationClient for OpenAPIClient<'a> {
         .await
     }
 
-    /// Aborts a specific operation.
+    /// Aborts the operation of a controller
     /// If the operation is not active, it does nothing.
     ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
-    ///
     /// # Returns
     /// - `Ok(())`: If the abort is requested without issues.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn abort(
-        &self,
-        controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-    ) -> Result<(), Self::ClientError> {
+    async fn abort(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to abort operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to abort operation of the controller {}",
+                controller_id
             )
         );
-        let url = format!("{}/{}/abort/{}", self.host, controller_id, operation_id);
+        let url = format!("{}/ctrl_mgr/abort/{}", self.host, controller_id);
         let result = self.client.post(&url).send().await;
         Self::match_ok(result).await
     }
 
-    /// Locks a specific operation.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
+    /// Locks a specific controller.
     ///
     /// # Returns
     /// - `Ok(())`: If the abort is requested without issues.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn lock(
-        &self,
-        controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-    ) -> Result<(), Self::ClientError> {
+    async fn lock(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to lock operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to lock the controller {}",
+                controller_id
             )
         );
-        let url = format!("{}/{}/lock/{}", self.host, controller_id, operation_id);
+        let url = format!("{}/ctrl_mgr/lock/{}", self.host, controller_id);
         let result = self.client.post(&url).send().await;
         Self::match_ok(result).await
     }
 
-    /// Unlocks a specific operation.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
+    /// Unlocks a specific controller.
     ///
     /// # Returns
     /// - `Ok(())`: If the abort is requested without issues.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn unlock(
-        &self,
-        controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
-    ) -> Result<(), Self::ClientError> {
+    async fn unlock(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to unlock operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to unlock the controller {}",
+                controller_id
             )
         );
-        let url = format!("{}/{}/unlock/{}", self.host, controller_id, operation_id);
+        let url = format!("{}/ctrl_mgr/unlock/{}", self.host, controller_id);
         let result = self.client.post(&url).send().await;
         Self::match_ok(result).await
     }
 
-    /// Activates the sensor of the operation if it has been set, and it is currently inactive.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
+    /// Activates the sensor of a controller.
     ///
     /// # Returns
     /// - `Ok(())`: If the activation was successful.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn activate_sensor(
+    async fn start_sensor(
         &self,
+
         controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to activate sensor for operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to start the sensor of the controller {}",
+                controller_id
             )
         );
 
-        let url = format!(
-            "{}/{}/activate_sensor/{}",
-            self.host, controller_id, operation_id
-        );
+        let url = format!("{}/ctrl_mgr/start_sensor/{}", self.host, controller_id);
 
         let result = self.client.post(&url).send().await;
         Self::match_ok(result).await
     }
 
-    /// Deactivates the sensor of the operation if it has been set, and it is currently active.
-    ///
-    /// # Parameters
-    /// - `controller_id`: A string slice that holds the controller ID.
-    /// - `operation_id`: A string slice that holds the operation ID.
+    /// Deactivates the sensor of a controller.
     ///
     /// # Returns
     /// - `Ok(())`: If the deactivation was successful.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
-    async fn deactivate_sensor(
+    async fn stop_sensor(
         &self,
         controller_id: Self::ControllerID,
-        operation_id: Self::OperationID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
             source = Self::CLIENT_LABEL,
             message = format!(
-                "Sending HTTP request to deactivate sensor for operation={} for controller={}",
-                operation_id, controller_id
+                "Sending HTTP request to stop the sensor of the controller {}",
+                controller_id
             )
         );
 
-        let url = format!(
-            "{}/{}/deactivate_sensor/{}",
-            self.host, controller_id, operation_id
-        );
+        let url = format!("{}/ctrl_mgr/stop_sensor/{}", self.host, controller_id);
 
         let result = self.client.post(&url).send().await;
         Self::match_ok(result).await
@@ -407,20 +302,20 @@ mod tests {
     use mockito::{Server, ServerOpts};
     use reqwest::ClientBuilder;
 
-    use autonomic_operation::errors::{ActivationError, ControllerError};
-    use autonomic_operation::operation::OpState;
-    use autonomic_operation::testkit::params::TestRetry;
+    use autonomic_controllers::controller::OpState;
+    use autonomic_controllers::errors::ControllerError;
+
+    const TEST_CTRL_MGR: &'static str = "ctrl_mgr";
 
     // --------------------------- Ok Tests ---------------------------
     #[tokio::test]
-    async fn test_get_op() {
+    async fn test_get_ctrl() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
-        let operation_info = OpInfo::from_str("Test Operation", "123", false, false, false);
+        let controller_id = "123";
+        let operation_info = ControllerInfo::from_str("Test Operation", "123", 0, false);
 
         // Response body as JSON
         let body = serde_json::to_string(&operation_info).unwrap();
@@ -428,7 +323,7 @@ mod tests {
         let _m = server
             .mock(
                 "GET",
-                format!("/{}/op/{}", controller_id, operation_id).as_str(),
+                format!("/{}/ctrl/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -438,28 +333,27 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let result = api_client.op(&controller_id, &operation_id).await.unwrap();
+        let result = api_client.ctrl(&controller_id).await.unwrap();
 
         assert_eq!(result, operation_info);
     }
 
     #[tokio::test]
-    async fn test_get_ops() {
+    async fn test_get_ctrls() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
         let operations_info = vec![
-            OpInfo::from_str("Operation1", "1", false, false, false),
-            OpInfo::from_str("Operation2", "2", false, false, false),
+            ControllerInfo::from_str("Ctrl_1", "1", 0, false),
+            ControllerInfo::from_str("Ctrl_2", "2", 0, false),
         ];
 
         // Response body as JSON
         let body = serde_json::to_string(&operations_info).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/list", controller_id).as_str())
+            .mock("GET", format!("/{}/list", TEST_CTRL_MGR).as_str())
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -467,24 +361,25 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.list(controller_id).await.unwrap();
+        let result = api_client.list().await.unwrap();
 
         assert_eq!(result, operations_info);
     }
 
     #[tokio::test]
-    async fn test_get_active_ops() {
+    async fn test_get_performing_ctrls() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
-
-        let controller_id = "controller1";
 
         // Response body as JSON array
         let body = r#"["ActiveOperation1", "ActiveOperation2"]"#;
 
         let _m = server
-            .mock("GET", format!("/{}/list_active", controller_id).as_str())
+            .mock(
+                "GET",
+                format!("/{}/list_performing", TEST_CTRL_MGR).as_str(),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -492,7 +387,7 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.list_active(controller_id).await.unwrap();
+        let result = api_client.list_performing().await.unwrap();
 
         assert_eq!(
             result,
@@ -504,76 +399,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_activate_op() {
+    async fn test_perform() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
-        let body = serde_json::to_string(&()).unwrap();
-
-        let _m = server
-            .mock(
-                "POST",
-                format!("/{}/activate/{}", controller_id, operation_id).as_str(),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(body)
-            .create();
-
-        let client = ClientBuilder::new().build().unwrap();
-        let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client
-            .activate(controller_id, operation_id, None)
-            .await
-            .unwrap();
-
-        assert_eq!(result, ());
-    }
-
-    #[tokio::test]
-    async fn test_activate_op_params() {
-        let config = ServerOpts::default();
-        let mut server = Server::new_with_opts_async(config).await;
-        let host = server.url();
-
-        let controller_id = "controller1";
-        let operation_id = "123";
-        let body = serde_json::to_string(&()).unwrap();
-
-        let _m = server
-            .mock(
-                "POST",
-                format!("/{}/activate/{}", controller_id, operation_id).as_str(),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(body)
-            .create();
-
-        let params = AnySerializable::new_register(TestRetry::new(3, 1000));
-
-        let client = ClientBuilder::new().build().unwrap();
-        let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client
-            .activate(controller_id, operation_id, Some(&params))
-            .await
-            .unwrap();
-
-        assert_eq!(result, ());
-    }
-
-    #[tokio::test]
-    async fn test_activate_op_stream() {
-        let config = ServerOpts::default();
-        let mut server = Server::new_with_opts_async(config).await;
-        let host = server.url();
-
-        let controller_id = "controller1";
-        let operation_id = "123";
-        let operation_state = OpState::Active;
+        let controller_id = "123";
+        let operation_state = OpState::Started;
 
         // Response body as JSON
         let body = serde_json::to_string(&operation_state).unwrap();
@@ -581,7 +413,7 @@ mod tests {
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/activate_stream/{}", controller_id, operation_id).as_str(),
+                format!("/{}/perform/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -591,11 +423,7 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let mut stream_map = api_client
-            .activate_stream(controller_id, operation_id, None)
-            .await
-            .unwrap()
-            .map();
+        let mut stream_map = api_client.perform(controller_id).await.unwrap().map();
 
         while let Some(result) = stream_map.next().await {
             assert_eq!(result, operation_state);
@@ -603,155 +431,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_activate_op_stream_params() {
+    async fn test_abort() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
-        let operation_state = OpState::Active;
-
-        // Response body as JSON
-        let body = serde_json::to_string(&operation_state).unwrap();
+        let controller_id = "123";
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/activate_stream/{}", controller_id, operation_id).as_str(),
-            )
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            // TODO: Not accurate because server sends SSE as MessageEvent with payload behind "data"
-            .with_body(body)
-            .create();
-
-        let client = ClientBuilder::new().build().unwrap();
-        let api_client = OpenAPIClient::new(client, &host);
-
-        let params = AnySerializable::new_register(TestRetry::new(3, 1000));
-
-        let mut stream_map = api_client
-            .activate_stream(controller_id, operation_id, Some(&params))
-            .await
-            .unwrap()
-            .map();
-
-        while let Some(result) = stream_map.next().await {
-            assert_eq!(result, operation_state);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_abort_op() {
-        let config = ServerOpts::default();
-        let mut server = Server::new_with_opts_async(config).await;
-        let host = server.url();
-
-        let controller_id = "controller1";
-        let operation_id = "123";
-
-        let _m = server
-            .mock(
-                "POST",
-                format!("/{}/abort/{}", controller_id, operation_id).as_str(),
+                format!("/{}/abort/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .create();
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.abort(controller_id, operation_id).await;
+        let result = api_client.abort(controller_id).await;
 
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_lock_op() {
+    async fn test_lock_ctrl() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
+        let controller_id = "123";
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/lock/{}", controller_id, operation_id).as_str(),
+                format!("/{}/lock/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .create();
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.lock(controller_id, operation_id).await;
+        let result = api_client.lock(controller_id).await;
 
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_unlock_op() {
+    async fn test_unlock_ctrl() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
+        let controller_id = "123";
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/unlock/{}", controller_id, operation_id).as_str(),
+                format!("/{}/unlock/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .create();
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.unlock(controller_id, operation_id).await;
+        let result = api_client.unlock(controller_id).await;
 
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_activate_sensor() {
+    async fn test_start_sensor() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
+        let controller_id = "123";
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/activate_sensor/{}", controller_id, operation_id).as_str(),
+                format!("/{}/start_sensor/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .create();
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client
-            .activate_sensor(controller_id, operation_id)
-            .await;
+        let result = api_client.start_sensor(controller_id).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_deactivate_sensor() {
+    async fn test_stop_sensor() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let operation_id = "123";
+        let controller_id = "123";
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/deactivate_sensor/{}", controller_id, operation_id).as_str(),
+                format!("/{}/stop_sensor/{}", TEST_CTRL_MGR, controller_id).as_str(),
             )
             .with_status(200)
             .create();
@@ -759,27 +540,24 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
 
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client
-            .deactivate_sensor(controller_id, operation_id)
-            .await;
+        let result = api_client.stop_sensor(controller_id).await;
         assert!(result.is_ok());
     }
 
     // --------------------------- Err Tests ---------------------------
     #[tokio::test]
-    async fn test_get_op_fails() {
+    async fn test_get_ctrl_fails() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
         let op_id = "123";
-        let error_response = ControllerError::OpNotFound;
+        let error_response = ControllerError::NotFound;
 
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/op/{}", controller_id, op_id).as_str())
+            .mock("GET", format!("/{}/ctrl/{}", TEST_CTRL_MGR, op_id).as_str())
             .with_status(404)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -787,29 +565,26 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.op(controller_id, op_id).await;
+        let result = api_client.ctrl(op_id).await;
 
         assert!(matches!(
             result,
-            Err(OpenAPIClientError::ResponseError(
-                ControllerError::OpNotFound
-            ))
+            Err(OpenAPIClientError::ResponseError(ControllerError::NotFound))
         ));
     }
 
     #[tokio::test]
-    async fn test_get_ops_fails() {
+    async fn test_get_ctrls_fails() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let error_response = ControllerError::OpNotFound;
+        let error_response = ControllerError::NotFound;
 
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/list", controller_id).as_str())
+            .mock("GET", format!("/{}/list", TEST_CTRL_MGR).as_str())
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -817,32 +592,29 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.list(controller_id).await;
+        let result = api_client.list().await;
 
         assert!(matches!(
             result,
-            Err(OpenAPIClientError::ResponseError(
-                ControllerError::OpNotFound
-            ))
+            Err(OpenAPIClientError::ResponseError(ControllerError::NotFound))
         ));
     }
 
     #[tokio::test]
-    async fn test_activate_op_stream_fails() {
+    async fn test_perform_fails() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
         let op_id = "123";
-        let error_response = ControllerError::ActivationErr(ActivationError::Active);
+        let error_response = ControllerError::Active;
 
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/activate_stream/{}", controller_id, op_id).as_str(),
+                format!("/{}/perform/{}", TEST_CTRL_MGR, op_id).as_str(),
             )
             .with_status(409)
             .with_header("content-type", "application/json")
@@ -852,32 +624,29 @@ mod tests {
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
 
-        let result = api_client.activate_stream(controller_id, op_id, None).await;
+        let result = api_client.perform(op_id).await;
 
         assert!(matches!(
             result,
-            Err(OpenAPIClientError::ResponseError(
-                ControllerError::ActivationErr(ActivationError::Active)
-            ))
+            Err(OpenAPIClientError::ResponseError(ControllerError::Active))
         ));
     }
 
     #[tokio::test]
-    async fn test_abort_op_fails() {
+    async fn test_abort_fails() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
         let op_id = "123";
-        let error_response = ControllerError::NoActiveOps;
+        let error_response = ControllerError::NoResults;
 
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
             .mock(
                 "POST",
-                format!("/{}/abort/{}", controller_id, op_id).as_str(),
+                format!("/{}/abort/{}", TEST_CTRL_MGR, op_id).as_str(),
             )
             .with_status(500)
             .with_header("content-type", "application/json")
@@ -886,29 +655,31 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.abort(controller_id, op_id).await;
+        let result = api_client.abort(op_id).await;
 
         assert!(matches!(
             result,
             Err(OpenAPIClientError::ResponseError(
-                ControllerError::NoActiveOps
+                ControllerError::NoResults
             ))
         ));
     }
 
     #[tokio::test]
-    async fn test_get_active_ops_fails() {
+    async fn test_list_performing_fails() {
         let config = ServerOpts::default();
         let mut server = Server::new_with_opts_async(config).await;
         let host = server.url();
 
-        let controller_id = "controller1";
-        let error_response = ControllerError::NoActiveOps;
+        let error_response = ControllerError::NoResults;
 
         let body = serde_json::to_string(&error_response).unwrap();
 
         let _m = server
-            .mock("GET", format!("/{}/list_active", controller_id).as_str())
+            .mock(
+                "GET",
+                format!("/{}/list_performing", TEST_CTRL_MGR).as_str(),
+            )
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(body)
@@ -916,12 +687,12 @@ mod tests {
 
         let client = ClientBuilder::new().build().unwrap();
         let api_client = OpenAPIClient::new(client, &host);
-        let result = api_client.list_active(controller_id).await;
+        let result = api_client.list_performing().await;
 
         assert!(matches!(
             result,
             Err(OpenAPIClientError::ResponseError(
-                ControllerError::NoActiveOps
+                ControllerError::NoResults
             ))
         ));
     }

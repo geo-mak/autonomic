@@ -18,8 +18,8 @@ use tracing_subscriber::layer::Context;
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
-use crate::traits::{EventRecorder, EventWriter, FileExtension, FileStoreFormat};
 use crate::trace_error;
+use crate::traits::{EventRecorder, EventWriter, FileExtension, FileStoreFormat};
 
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.

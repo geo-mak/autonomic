@@ -1,0 +1,21 @@
+[package]
+name = "autonomic_serde"
+version = "0.1.0"
+edition = "2024"
+
+[[bench]]
+name = "benchmarks"
+harness = false
+required-features = ["testkit"]
+
+[dev-dependencies]
+criterion = "0.6.0"
+
+[dependencies]
+lazy_static.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+testkit = []

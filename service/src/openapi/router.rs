@@ -1,7 +1,7 @@
+use std::convert::Infallible;
+
 use futures_util::StreamExt;
 use futures_util::stream::Map;
-use std::convert::Infallible;
-use std::sync::Arc;
 
 use tokio_stream::wrappers::WatchStream;
 
@@ -16,79 +16,49 @@ use axum::{
 
 use autonomic_events::trace_trace;
 
-use autonomic_api::operation::OperationService;
+use autonomic_api::controller::ControllerService;
 
-use autonomic_operation::controller::OperationController;
-use autonomic_operation::errors::{ActivationError, ControllerError};
-use autonomic_operation::operation::{OpInfo, OpState};
-use autonomic_operation::serde::AnySerializable;
-use autonomic_operation::traits::Identity;
+use autonomic_controllers::controller::{ControllerInfo, OpState};
+use autonomic_controllers::errors::ControllerError;
+use autonomic_controllers::provider::ControllerManager;
 
-/// Creates a router instance with endpoints related to the operation service.
-///
-/// # Parameters
-/// - `controller`: The operation controller instance.
+/// Creates a router instance with endpoints related to the controller service.
 ///
 /// # Endpoints:`
-/// - `GET` `/{controller_id}/op/{id}`: Retrieves a specific operation by its ID.
-/// - `GET` `/{controller_id}/ops`: Retrieves all operations.
-/// - `GET` `/{controller_id}/active_ops`: Retrieves the currently active operations.
-/// - `POST` `/{controller_id}/activate/{id}`: Activates a specific operation without streaming its state updates.
-/// - `POST` `/{controller_id}/activate_stream/{id}`: Activates a specific operation and sends its states as `SSE` stream.
-/// - `POST` `/{controller_id}/abort/{id}`: Aborts a specific operation.
-/// - `POST` `/{controller_id}/lock/{id}`: Locks a specific operation.
-/// - `POST` `/{controller_id}/unlock/{id}`: Unlocks a specific operation.
-/// - `POST` `/{controller_id}/activate_sensor/{id}`: Activates the sensor for a specific operation.
-/// - `POST` `/{controller_id}/deactivate_sensor/{id}`: Deactivates the sensor for a specific operation.
-///
-/// > **Important Note**:
-/// > The URL path is based on the `controller ID`, which must be unique for each controller.
-/// > If the controller ID is not unique, the endpoints will clash.
+/// - `GET` `/{manager_id}/ctrl/{id}`: Retrieves a specific controller by its ID.
+/// - `GET` `/{manager_id}/list`: Retrieves all controllers.
+/// - `GET` `/{manager_id}/list_performing`: Retrieves the controllers with currently active operations.
+/// - `POST` `/{manager_id}/perform/{id}`: Activates the operation of a specific controller and sends its states as `SSE` stream.
+/// - `POST` `/{manager_id}/abort/{id}`: Aborts an operation of a controller.
+/// - `POST` `/{manager_id}/lock/{id}`: Locks a specific controller.
+/// - `POST` `/{manager_id}/unlock/{id}`: Unlocks a specific controller.
+/// - `POST` `/{manager_id}/start_sensor/{id}`: Activates the sense of a specific controller.
+/// - `POST` `/{manager_id}/stop_sensor/{id}`: Deactivates the sense of a specific controller.
 ///
 /// # Fallback Response
 /// - Status: `501`.
 /// - Body: `ControllerError::NotImplemented`.
-///
-/// # Returns
-/// A `Router` contains endpoints related to the controller service.
-pub fn operation_router(controller: Arc<OperationController<'static>>) -> Router {
-    let base_path = { format!("/{}", controller.id()) };
+pub fn controller_router(provider: &'static ControllerManager) -> Router {
     Router::new()
-        .route(&format!("{}/op/:id", base_path), get(OpenAPIEndpoints::op))
-        .route(&format!("{}/list", base_path), get(OpenAPIEndpoints::list))
+        .route("/ctrl_mgr/ctrl/:id", get(OpenAPIEndpoints::ctrl))
+        .route("/ctrl_mgr/list", get(OpenAPIEndpoints::list))
         .route(
-            &format!("{}/list_active", base_path),
-            get(OpenAPIEndpoints::list_active),
+            "/ctrl_mgr/list_performing",
+            get(OpenAPIEndpoints::list_performing),
+        )
+        .route("/ctrl_mgr/perform/:id", post(OpenAPIEndpoints::perform))
+        .route("/ctrl_mgr/abort/:id", post(OpenAPIEndpoints::abort))
+        .route("/ctrl_mgr/lock/:id", post(OpenAPIEndpoints::lock))
+        .route("/ctrl_mgr/unlock/:id", post(OpenAPIEndpoints::unlock))
+        .route(
+            "/ctrl_mgr/start_sensor/:id",
+            post(OpenAPIEndpoints::start_sensor),
         )
         .route(
-            &format!("{}/activate/:id", base_path),
-            post(OpenAPIEndpoints::activate),
+            "/ctrl_mgr/stop_sensor/:id",
+            post(OpenAPIEndpoints::stop_sensor),
         )
-        .route(
-            &format!("{}/activate_stream/:id", base_path),
-            post(OpenAPIEndpoints::activate_stream),
-        )
-        .route(
-            &format!("{}/abort/:id", base_path),
-            post(OpenAPIEndpoints::abort),
-        )
-        .route(
-            &format!("{}/lock/:id", base_path),
-            post(OpenAPIEndpoints::lock),
-        )
-        .route(
-            &format!("{}/unlock/:id", base_path),
-            post(OpenAPIEndpoints::unlock),
-        )
-        .route(
-            &format!("{}/activate_sensor/:id", base_path),
-            post(OpenAPIEndpoints::activate_sensor),
-        )
-        .route(
-            &format!("{}/deactivate_sensor/:id", base_path),
-            post(OpenAPIEndpoints::deactivate_sensor),
-        )
-        .layer(Extension(controller))
+        .layer(Extension(provider))
         .fallback(not_implemented)
 }
 
@@ -99,12 +69,10 @@ impl IntoResponse for ServiceError {
     fn into_response(self) -> Response {
         let status_code = match self.0 {
             ControllerError::NotImplemented => StatusCode::NOT_IMPLEMENTED,
-            ControllerError::Empty => StatusCode::NO_CONTENT,
-            ControllerError::OpNotFound => StatusCode::NOT_FOUND,
-            ControllerError::NoActiveOps => StatusCode::NOT_FOUND,
-            ControllerError::ActivationErr(ActivationError::Active) => StatusCode::CONFLICT,
-            ControllerError::ActivationErr(ActivationError::NotSet) => StatusCode::NOT_FOUND,
-            ControllerError::ActivationErr(ActivationError::Locked) => StatusCode::LOCKED,
+            ControllerError::NoResults => StatusCode::NO_CONTENT,
+            ControllerError::NotFound => StatusCode::NOT_FOUND,
+            ControllerError::Active => StatusCode::CONFLICT,
+            ControllerError::Locked => StatusCode::LOCKED,
         };
 
         let body = Json(self.0);
@@ -117,50 +85,41 @@ async fn not_implemented() -> ServiceError {
     ServiceError(ControllerError::NotImplemented)
 }
 
-type StateStream = Sse<Map<WatchStream<OpState>, fn(OpState) -> Result<Event, Infallible>>>;
+type StreamMapper = Map<WatchStream<OpState>, fn(OpState) -> Result<Event, Infallible>>;
+type EventsStream = Sse<StreamMapper>;
 
-const SERVICE_LABEL: &'static str = "OpenAPIService";
+const SERVICE_LABEL: &str = "OpenAPIService";
 
 struct OpenAPIEndpoints;
 
-impl OperationService for OpenAPIEndpoints {
-    // **Note**: We use `Arc` because `Extension` clones the value on each request.
-    // Making the controller static can be a better option.
-    type Controller = Extension<Arc<OperationController<'static>>>;
+impl ControllerService for OpenAPIEndpoints {
+    type ServiceProvider = Extension<&'static ControllerManager>;
     type ServiceError = ServiceError;
-    type OperationID = Path<String>;
-    type OperationReturn = Json<OpInfo>;
-    type OperationsReturn = Json<Vec<OpInfo>>;
-    type ActiveOperationsReturn = Json<Vec<&'static str>>;
-    type ActivationParams = Json<Option<AnySerializable>>;
-    type ActivateReturn = StatusCode;
-    type ActivateStreamReturn = StateStream;
+    type ControllerID = Path<String>;
+    type ControllerReturn = Json<ControllerInfo>;
+    type ControllersReturn = Json<Vec<ControllerInfo>>;
+    type PerformingReturn = Json<Vec<&'static str>>;
+    type PerformReturn = EventsStream;
     type AbortReturn = StatusCode;
     type LockReturn = StatusCode;
     type UnlockReturn = StatusCode;
-    type ActivateSensorReturn = StatusCode;
-    type DeactivateSensorReturn = StatusCode;
+    type StartSensorReturn = StatusCode;
+    type StopSensorReturn = StatusCode;
 
     /// Retrieves a specific operation by its ID.
     ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to retrieve.
-    ///
     /// # Returns
-    /// - Status code `200` and `Json<OpInfo>` as body: If the request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    async fn op(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
-    ) -> Result<Self::OperationReturn, Self::ServiceError> {
+    /// - Status code `200` and `Json<ControllerInfo>` as body: If the request was successful.
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
+    async fn ctrl(
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
+    ) -> Result<Self::ControllerReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to get operation={}", id)
+            message = format!("Received HTTP request to get controller {}", id)
         );
-        // further data is done in the controller
-        match controller.op(id.as_str()) {
+        match provider.controller(id.as_str()) {
             Ok(op_info) => Ok(Json(op_info)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -168,21 +127,17 @@ impl OperationService for OpenAPIEndpoints {
 
     /// Retrieves all operations.
     ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    ///
     /// # Returns
-    /// - Status code `200` and `Json<Vec<OpInfo>>` as body: If the request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the teh controller is empty.
+    /// - Status code `200` and `Json<Vec<ControllerInfo>>` as body: If the request was successful.
+    /// - Status code `204` and `Json<ControllerError::NoResults>` as body: If there are no controllers.
     async fn list(
-        Extension(controller): Self::Controller,
-    ) -> Result<Self::OperationsReturn, Self::ServiceError> {
+        Extension(provider): Self::ServiceProvider,
+    ) -> Result<Self::ControllersReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = "Received HTTP request to get all operations"
+            message = "Received HTTP request to list controllers"
         );
-        // further data is done in the controller
-        match controller.list() {
+        match provider.list() {
             Ok(op_infos) => Ok(Json(op_infos)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -190,103 +145,56 @@ impl OperationService for OpenAPIEndpoints {
 
     /// Retrieves the currently active operations.
     ///
-    /// This function locks the `ActivationController`, retrieves the list of currently active operations
-    /// using the `active_ops` method, and returns them as a JSON response.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    ///
     /// # Returns
     /// - Status code `200` and `Json<Vec<String>>` as body: If the request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
     /// - Status code `404` and `Json<ControllerError::NoActiveOps>` as body: If the controller is empty.
-    async fn list_active(
-        Extension(controller): Self::Controller,
-    ) -> Result<Self::ActiveOperationsReturn, Self::ServiceError> {
+    async fn list_performing(
+        Extension(provider): Self::ServiceProvider,
+    ) -> Result<Self::PerformingReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = "Received HTTP request to get all active operations"
+            message = "Received HTTP request to list controllers with performing operations"
         );
-        match controller.list_active() {
+        match provider.list_performing() {
             Ok(ops) => Ok(Json(ops)),
-            Err(err) => Err(ServiceError(err)),
-        }
-    }
-
-    /// Activates a specific operation by its ID.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to activate.
-    /// - `params`: Optional parameters for the operation.
-    ///
-    /// # Returns
-    /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    /// - Status code `409` and `Json<ActivationError::Active>` as body: If the operation is already active.
-    /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
-    async fn activate(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
-        Json(params): Self::ActivationParams,
-    ) -> Result<Self::ActivateReturn, Self::ServiceError> {
-        trace_trace!(
-            source = SERVICE_LABEL,
-            message = format!("Received HTTP request to activate operation={}", id)
-        );
-        match controller.activate(id.as_str(), params) {
-            Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
     }
 
     /// Activates a specific operation and sends its states as `Server-Sent Events (SSE)` stream.
     ///
-    /// This method is useful for activation requests where live state updates are needed.
-    /// However, it is recommended to set up an event channel using events' publisher to track all events.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to activate.
-    /// - `params`: Optional parameters for the operation.
-    ///
     /// # Returns
     /// - Status code `200` and `Sse` stream as body: If request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    /// - Status code `409` and `Json<ActivationError::Active>` as body: If the operation is already active.
-    /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
-    async fn activate_stream(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
-        Json(params): Self::ActivationParams,
-    ) -> Result<Self::ActivateStreamReturn, Self::ServiceError> {
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the operation is not found.
+    /// - Status code `409` and `Json<ControllerError::Active>` as body: If the operation is already active.
+    /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the operation is locked.
+    async fn perform(
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
+    ) -> Result<Self::PerformReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = format!(
-                "Received HTTP request to activate operation={} with streaming",
+                "Received HTTP request start the operation of the controller {} with streaming",
                 id
             )
         );
-        match controller.activate_stream(id.as_str(), params) {
+        match provider.perform(id.as_str()) {
             Ok(watch_stream) => {
                 // Transform the stream to emit SSE events
                 // Full annotation is required here to avoid type inference issues
-                let stream_map: Map<
-                    WatchStream<OpState>,
-                    fn(OpState) -> Result<Event, Infallible>,
-                > = watch_stream.map(|state| {
-                    // This shouldn't fail
-                    Ok::<Event, Infallible>(
-                        Event::default()
-                            .json_data(state)
-                            .expect("Unable to serialize state to create an event"),
-                    )
+                let stream_map: StreamMapper = watch_stream.map(|state| {
+                    let event = Event::default()
+                        .json_data(state)
+                        .expect("Unable to serialize state to create an event");
+                    Ok(event)
                 });
                 trace_trace!(
                     source = SERVICE_LABEL,
-                    message = format!("Starting SSE stream for operation={}", id)
+                    message = format!(
+                        "Starting SSE stream for the operation of the controller {}",
+                        id
+                    )
                 );
                 Ok(Sse::new(stream_map))
             }
@@ -294,128 +202,108 @@ impl OperationService for OpenAPIEndpoints {
         }
     }
 
-    /// Aborts a specific operation.
-    /// Aborted state are expected to be received by the client with event stream,
-    /// or when retrieving operation's data from data API.
+    /// Aborts the operation of a controller.
     ///
     /// > **Note**: It does not guarantee that operation will be aborted.
     ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to abort.
-    ///
     /// # Returns
     /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn abort(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
     ) -> Result<Self::AbortReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to abort operation={}", id)
+            message = format!(
+                "Received HTTP request to abort the operation of controller {}",
+                id
+            )
         );
-        match controller.abort(id.as_str()) {
+        match provider.abort(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
     }
 
-    /// Locks a specific operation.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to abort.
+    /// Locks a specific controller.
     ///
     /// # Returns
     /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn lock(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
     ) -> Result<Self::LockReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to lock operation={}", id)
+            message = format!("Received HTTP request to lock the controller {}", id)
         );
-        match controller.lock(id.as_str()) {
+        match provider.lock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
     }
-    /// Unlocks a specific operation.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to abort.
+    /// Unlocks a specific controller.
     ///
     /// # Returns
     /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn unlock(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
     ) -> Result<Self::UnlockReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to unlock operation={}", id)
+            message = format!("Received HTTP request to unlock the controller {}", id)
         );
-        match controller.unlock(id.as_str()) {
+        match provider.unlock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
     }
 
-    /// Activates the sensor associated with an operation.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to abort.
+    /// Activates the sensor associated with a controller.
     ///
     /// # Returns
     /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    /// - Status code `404` and `Json<ActivationError::NotSet>` as body: If the sensor has not been set.
-    /// - Status code `409` and `Json<ActivationError::Active>` as body: If the sensor is already active.
-    /// - Status code `423` and `Json<ActivationError::Locked>` as body: If the operation is locked.
-    async fn activate_sensor(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
-    ) -> Result<Self::ActivateSensorReturn, Self::ServiceError> {
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
+    /// - Status code `409` and `Json<ControllerError::Active>` as body: If the sensor is already active.
+    /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the controller is locked.
+    async fn start_sensor(
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
+    ) -> Result<Self::StartSensorReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to activate sensor={}", id)
+            message = format!(
+                "Received HTTP request to activate the sense of the controller {}",
+                id
+            )
         );
-        match controller.activate_sensor(id.as_str()) {
+        match provider.start_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
     }
 
-    /// Activates the sensor associated with an operation.
-    ///
-    /// # Parameters
-    /// - `controller`: the controller instance.
-    /// - `id`: The ID of the operation to abort.
+    /// Activates the sensor of the controller.
     ///
     /// # Returns
     /// - Status code `200`: if request was successful.
-    /// - Status code `204` and `Json<ControllerError::Empty>` as body: If the controller is empty.
-    /// - Status code `404` and `Json<ControllerError::OpNotFound>` as body: If the operation is not found.
-    /// - Status code `404` and `Json<ActivationError::NotSet>` as body: If the sensor has not been set.
-    async fn deactivate_sensor(
-        Extension(controller): Self::Controller,
-        Path(id): Self::OperationID,
-    ) -> Result<Self::DeactivateSensorReturn, Self::ServiceError> {
+    /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
+    async fn stop_sensor(
+        Extension(provider): Self::ServiceProvider,
+        Path(id): Self::ControllerID,
+    ) -> Result<Self::StopSensorReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
-            message = format!("Received HTTP request to deactivate sensor={}", id)
+            message = format!(
+                "Received HTTP request to deactivate the sense of the controller {}",
+                id
+            )
         );
-        match controller.deactivate_sensor(id.as_str()) {
+        match provider.stop_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -435,26 +323,23 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
 
-    use autonomic_operation::controller::OperationController;
-    use autonomic_operation::operation::OpState;
-    use autonomic_operation::traits::{Describe, Identity, IntoArc, IntoSensor};
+    use autonomic_controllers::controller::OpState;
+    use autonomic_controllers::provider::ControllerManager;
 
-    use autonomic_operation::testkit::conditions::TestIntervalCondition;
-    use autonomic_operation::testkit::operation::TestOperation;
-    use autonomic_operation::testkit::params::TestRetry;
-    use autonomic_operation::testkit::tracing::init_tracing;
+    use autonomic_controllers::testkit::controller::TestController;
+    use autonomic_events::testkit::global::init_tracing;
 
     #[tokio::test]
     async fn test_fallback() {
         init_tracing();
-        let controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let router = operation_router(controller.into_arc());
+        let router = controller_router(provider);
 
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/not_implemented/")
+                    .uri("/ctrl_mgr/not_implemented/")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -468,28 +353,26 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let err =
-            serde_json::from_slice::<ControllerError>(&body).expect("Failed to deserialize OpInfo");
+        let err = serde_json::from_slice::<ControllerError>(&body)
+            .expect("Failed to deserialize ControllerInfo");
 
         assert_eq!(err, ControllerError::NotImplemented)
     }
 
     #[tokio::test]
-    async fn test_get_op() {
+    async fn test_get_ctrl() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, None, 0);
 
-        let operation_id = operation.id();
-        let operation_desc = operation.describe();
+        provider.submit(controller);
 
-        controller.submit(operation, None);
-
-        let router = operation_router(controller.into_arc());
+        let router = controller_router(provider);
 
         let request = Request::builder()
-            .uri(format!("/test_controller/op/{}", operation_id))
+            .uri(format!("/ctrl_mgr/ctrl/{}", controller_id))
             .body(Body::empty())
             .unwrap();
 
@@ -502,42 +385,36 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let received_info: OpInfo =
-            serde_json::from_slice(&body).expect("Failed to deserialize OpInfo");
+        let received_info: ControllerInfo =
+            serde_json::from_slice(&body).expect("Failed to deserialize ControllerInfo");
 
-        assert_eq!(received_info.id(), operation_id);
-        assert_eq!(received_info.description(), operation_desc);
-        assert_eq!(received_info.active(), false);
+        assert_eq!(received_info.id(), controller_id);
+        assert_eq!(received_info.description(), controller_id);
+        assert_eq!(received_info.performing(), false);
     }
 
     #[tokio::test]
-    async fn test_get_ops() {
-        init_tracing();
-        let mut controller = OperationController::new("test_controller");
+    async fn test_get_ctrls() {
+        let provider = ControllerManager::new().into_static();
 
-        let operation_1 = TestOperation::ok("test_operation_1", "this is test operation 1", None);
-        let operation_2 = TestOperation::ok("test_operation_2", "this is test operation 2", None);
-        let operation_3 = TestOperation::ok("test_operation_3", "this is test operation 3", None);
+        let controller_1_id = "test_controller_1";
+        let controller_2_id = "test_controller_2";
+        let controller_3_id = "test_controller_3";
 
-        // Operation will move to controller, clone id and description
-        let operation_1_id = operation_1.id();
-        let operation_2_id = operation_2.id();
-        let operation_3_id = operation_3.id();
+        let controller_1 = TestController::ok(controller_1_id, None, 0);
+        let controller_2 = TestController::ok(controller_2_id, None, 0);
+        let controller_3 = TestController::ok(controller_3_id, None, 0);
 
-        let operation_1_des = operation_1.describe();
-        let operation_2_des = operation_2.describe();
-        let operation_3_des = operation_3.describe();
+        provider.submit(controller_1);
+        provider.submit(controller_2);
+        provider.submit(controller_3);
 
-        controller.submit(operation_1, None);
-        controller.submit(operation_2, None);
-        controller.submit(operation_3, None);
-
-        let router = operation_router(controller.into_arc());
+        let router = controller_router(provider);
 
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/list")
+                    .uri("/ctrl_mgr/list")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -551,75 +428,69 @@ mod tests {
             .await
             .expect("Failed to read body");
 
-        let mut operations_info: Vec<OpInfo> =
+        let mut controllers_info: Vec<ControllerInfo> =
             serde_json::from_slice(&body).expect("Failed to deserialize slice as vector");
 
-        let mut expected_ops_info = vec![
-            OpInfo::from_str(operation_1_id, operation_1_des, false, false, false),
-            OpInfo::from_str(operation_2_id, operation_2_des, false, false, false),
-            OpInfo::from_str(operation_3_id, operation_3_des, false, false, false),
+        let mut expected = vec![
+            ControllerInfo::from_str(controller_1_id, controller_1_id, 0, false),
+            ControllerInfo::from_str(controller_2_id, controller_2_id, 0, false),
+            ControllerInfo::from_str(controller_3_id, controller_3_id, 0, false),
         ];
 
-        // Sort both vectors
-        operations_info.sort_by(|a, b| a.id().cmp(b.id()));
-        expected_ops_info.sort_by(|a, b| a.id().cmp(b.id()));
+        controllers_info.sort_by(|a, b| a.id().cmp(b.id()));
+        expected.sort_by(|a, b| a.id().cmp(b.id()));
 
-        // Compare the sorted vectors
-        assert_eq!(operations_info, expected_ops_info);
+        assert_eq!(controllers_info, expected);
     }
 
     #[tokio::test]
-    async fn test_get_active_ops() {
+    async fn test_get_perf_ctrl() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let active_operation = TestOperation::ok(
-            "active_operation",
-            "this is test operation",
-            Some(Duration::from_millis(10)),
-        );
+        let active_controller_id = "active_ctrl";
+        let active_ctrl =
+            TestController::ok(active_controller_id, Some(Duration::from_millis(10)), 0);
 
-        let inactive_operation =
-            TestOperation::ok("inactive_operation", "this is test operation", None);
+        let inactive_controller_id = "inactive_ctrl";
+        let inactive_ctrl = TestController::ok(inactive_controller_id, None, 0);
 
-        let active_op_id = active_operation.id();
+        provider.submit(active_ctrl);
 
-        controller.submit(active_operation, None);
-        controller.submit(inactive_operation, None);
+        provider.submit(inactive_ctrl);
 
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         // Test when no operations are active
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/list_active")
+                    .uri("/ctrl_mgr/list_performing")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
 
         let error: ControllerError =
             serde_json::from_slice(&body).expect("Failed to deserialize controllerError");
 
-        assert_eq!(error, ControllerError::NoActiveOps);
+        assert_eq!(error, ControllerError::NoResults);
 
         // Activate the operation
-        controller_ref.activate::<()>(&active_op_id, None).unwrap();
+        provider.perform(&active_controller_id).unwrap();
 
         // Operation execution is delayed for 10 millis, so it should be still active when we check
         tokio::time::sleep(Duration::from_millis(1)).await;
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri("/test_controller/list_active")
+                    .uri("/ctrl_mgr/list_performing")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -638,86 +509,25 @@ mod tests {
             .expect("Failed to deserialize Vec<String>");
 
         // The first element must be the active operation
-        assert_eq!(result[0], active_op_id.to_string());
+        assert_eq!(result[0], active_controller_id.to_string());
     }
 
     #[tokio::test]
-    async fn test_activate_op() {
+    async fn test_perform() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, None, 0);
 
-        let operation_id = operation.id();
+        provider.submit(controller);
 
-        controller.submit(operation, None);
-
-        let router = operation_router(controller.into_arc());
+        let router = controller_router(provider);
 
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/test_controller/activate/{}", operation_id))
-                    .method("POST")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(r#"null"#)) // No parameters
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_activate_op_params() {
-        init_tracing();
-        let mut controller = OperationController::new("test_controller");
-
-        let operation = TestOperation::err("test_operation", "this is test operation", None);
-
-        let operation_id = operation.id();
-
-        controller.submit(operation, None);
-
-        let params = AnySerializable::new_register(TestRetry::new(3, 0));
-
-        let params_json = serde_json::to_string(&Some(params)).unwrap();
-
-        let router = operation_router(controller.into_arc());
-
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/test_controller/activate/{}", operation_id))
-                    .method("POST")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(params_json)) // No parameters
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_activate_op_stream() {
-        init_tracing();
-        let mut controller = OperationController::new("test_controller");
-
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
-
-        let operation_id = operation.id();
-
-        controller.submit(operation, None);
-
-        let router = operation_router(controller.into_arc());
-
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/test_controller/activate_stream/{}", operation_id))
+                    .uri(format!("/ctrl_mgr/perform/{}", controller_id))
                     .method("POST")
                     .header("Content-Type", "application/json")
                     .body(Body::from(r#"null"#)) // No parameters with `None`
@@ -758,98 +568,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_activate_op_stream_params() {
+    async fn test_abort_ctrl() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        // Failing operation to test parameters that rerun operation on failure
-        let operation = TestOperation::err("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
 
-        let operation_id = operation.id();
+        // Duration is high to make sure abort is working as espected.
+        let controller = TestController::ok(controller_id, Some(Duration::from_secs(10)), 0);
 
-        controller.submit(operation, None);
-
-        let params = AnySerializable::new_register(TestRetry::new(3, 0));
-
-        let params_json = serde_json::to_string(&Some(params)).unwrap();
-
-        let request = Request::builder()
-            .uri(format!("/test_controller/activate_stream/{}", operation_id))
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .body(Body::from(params_json))
-            .unwrap();
-
-        let router = operation_router(controller.into_arc());
-
-        let response = router.oneshot(request).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        // body must not be empty
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("Failed to read body");
-
-        // Convert bytes to string
-        let data = std::str::from_utf8(&body).expect("Failed to convert bytes to string");
-
-        // Get the last event
-        let last_event = data
-            .lines()
-            .filter(|line| !line.is_empty())
-            .last()
-            .expect("No events found");
-
-        // "data: " prefix from event must be removed to deserialize the JSON string
-        let json_str = last_event.trim_start_matches("data: ");
-
-        let state_message: OpState =
-            serde_json::from_str(json_str).expect("Failed to deserialize OperationState");
-
-        let expected_event_done = OpState::Failed(Some(Cow::Borrowed("Expected Error")));
-
-        assert_eq!(
-            state_message, expected_event_done,
-            "Unexpected event: {}",
-            state_message
-        );
-    }
-
-    #[tokio::test]
-    async fn test_abort_operation() {
-        init_tracing();
-        let mut controller = OperationController::new("test_controller");
-
-        // The sum of the waiting time must be less than 5 millis,
-        // in order to guarantee realistic activation/abort cycle
-        let operation = TestOperation::ok(
-            "test_operation",
-            "this is test operation",
-            Some(Duration::from_millis(10)),
-        );
-
-        let operation_id = operation.id();
-
-        controller.submit(operation, None);
+        provider.submit(controller);
 
         // Activate the operation
-        controller.activate::<()>(&operation_id, None).unwrap();
+        provider.perform(&controller_id).unwrap();
 
         // Wait some time for activation to take place
         tokio::time::sleep(Duration::from_millis(2)).await;
 
         // Operation must be active by now
-        assert!(controller.is_active(&operation_id).unwrap());
+        assert!(provider.is_performing(&controller_id).unwrap());
 
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         // Abort request
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/test_controller/abort/{}", operation_id))
+                    .uri(format!("/ctrl_mgr/abort/{}", controller_id))
                     .method("POST")
                     .body(Body::empty())
                     .unwrap(),
@@ -864,28 +609,26 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2)).await;
 
         // Operation must have been deactivated
-        assert!(!controller_ref.is_active(&operation_id).unwrap());
+        assert!(!provider.is_performing(&controller_id).unwrap());
     }
 
     #[tokio::test]
-    async fn test_lock_operation() {
+    async fn test_lock_ctrl() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, None, 0);
 
-        let operation_id = operation.id();
+        provider.submit(controller);
 
-        controller.submit(operation, None);
-
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         // Lock request
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/test_controller/lock/{}", operation_id))
+                    .uri(format!("/ctrl_mgr/lock/{}", controller_id))
                     .method("POST")
                     .body(Body::empty())
                     .unwrap(),
@@ -897,31 +640,29 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Operation must have been locked
-        assert!(controller_ref.is_locked(&operation_id).unwrap());
+        assert!(provider.is_locked(&controller_id).unwrap());
     }
 
     #[tokio::test]
-    async fn test_unlock_operation() {
+    async fn test_unlock_ctrl() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, None, 0);
 
-        let operation_id = operation.id();
-
-        controller.submit(operation, None);
+        provider.submit(controller);
 
         // Lock the operation
-        controller.lock(operation_id).unwrap();
+        provider.lock(controller_id).unwrap();
 
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         // Unlock request
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/test_controller/unlock/{}", operation_id))
+                    .uri(format!("/ctrl_mgr/unlock/{}", controller_id))
                     .method("POST")
                     .body(Body::empty())
                     .unwrap(),
@@ -932,31 +673,26 @@ mod tests {
         // Response should be ok
         assert_eq!(response.status(), StatusCode::OK);
 
-        // Operation must have been unlocked
-        assert!(!controller_ref.is_locked(&operation_id).unwrap());
+        // Controller must have been unlocked
+        assert!(!provider.is_locked(&controller_id).unwrap());
     }
 
     #[tokio::test]
-    async fn test_activate_sensor() {
+    async fn test_start_sensor() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, Some(Duration::from_millis(10)), 0);
 
-        let operation_id = operation.id();
+        provider.submit(controller);
 
-        // one second interval for activation
-        let sensor = TestIntervalCondition::new(1, None).into_sensor();
-
-        controller.submit(operation, Some(sensor));
-
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         let response = &router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/test_controller/activate_sensor/{}", operation_id))
+                    .uri(format!("/ctrl_mgr/start_sensor/{}", controller_id))
                     .method("POST")
                     .header("Content-Type", "application/json")
                     .body(Body::from(r#"null"#)) // No parameters
@@ -972,42 +708,34 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Sensor must be active by now
-        assert!(controller_ref.is_sensor_active(&operation_id).unwrap());
+        assert!(provider.sensing(&controller_id).unwrap());
     }
 
     #[tokio::test]
-    async fn test_deactivate_sensor() {
+    async fn test_stop_sensor() {
         init_tracing();
-        let mut controller = OperationController::new("test_controller");
+        let provider = ControllerManager::new().into_static();
 
-        let operation = TestOperation::ok("test_operation", "this is test operation", None);
+        let controller_id = "test_controller";
+        let controller = TestController::ok(controller_id, Some(Duration::from_millis(10)), 1);
 
-        let operation_id = operation.id();
-
-        // one second interval for activation
-        let sensor = TestIntervalCondition::new(1, None).into_sensor();
-
-        controller.submit(operation, Some(sensor));
+        provider.submit(controller);
 
         // Active sensor in controller
-        controller.activate_sensor(&operation_id).unwrap();
+        provider.start_sensor(&controller_id).unwrap();
 
         // Wait some time for activation to take place
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Sensor must be active by now
-        assert!(controller.is_sensor_active(&operation_id).unwrap());
+        assert!(provider.sensing(&controller_id).unwrap());
 
-        let controller_ref = controller.into_arc();
-        let router = operation_router(controller_ref.clone());
+        let router = controller_router(provider);
 
         let response = &router
             .oneshot(
                 Request::builder()
-                    .uri(format!(
-                        "/test_controller/deactivate_sensor/{}",
-                        operation_id
-                    ))
+                    .uri(format!("/ctrl_mgr/stop_sensor/{}", controller_id))
                     .method("POST")
                     .header("Content-Type", "application/json")
                     .body(Body::from(r#"null"#)) // No parameters
@@ -1023,6 +751,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Sensor must have been deactivated
-        assert!(!controller_ref.is_sensor_active(&operation_id).unwrap());
+        assert!(!provider.sensing(&controller_id).unwrap());
     }
 }

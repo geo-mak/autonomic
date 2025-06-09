@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dev-dependencies]
-autonomic_operation = { workspace = true, features = ["testkit"]}
+autonomic_controllers = { workspace = true, features = ["testkit"]}
+autonomic_events = { workspace = true, features = ["testkit"]}
 tower = {version = "0.5.2", features = ["futures-util"]}
 mockito = "1.7.0"
 
 [dependencies]
 autonomic_api.workspace = true
 autonomic_events.workspace = true
-autonomic_operation.workspace = true
+autonomic_controllers.workspace = true
 
 tracing.workspace = true
 tokio.workspace = true

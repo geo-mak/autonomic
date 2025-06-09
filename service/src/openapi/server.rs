@@ -166,7 +166,7 @@ mod tests {
     use axum::{Router, routing::get};
     use reqwest::{Client, StatusCode};
 
-    use autonomic_operation::testkit::tracing::init_tracing;
+    use autonomic_events::testkit::global::init_tracing;
 
     async fn test_handler() -> StatusCode {
         StatusCode::OK

@@ -10,8 +10,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use lazy_static::lazy_static;
 
-use crate::operation::OperationParameters;
-
 /// Serializable trait as marker for serializable types.
 /// Types implementing this trait can be serialized, deserialized, and cloned.
 pub trait GenericSerializable: Any + Send + Sync + Debug {
@@ -32,9 +30,9 @@ lazy_static! {
         RwLock::new(HashMap::new());
 }
 
-pub struct DeserializeRegistry;
+pub struct TypeRegistry;
 
-impl DeserializeRegistry {
+impl TypeRegistry {
     /// Registers a type to be dynamically deserializable.
     pub fn register<T>() -> &'static str
     where
@@ -105,7 +103,7 @@ impl AnySerializable {
         T: GenericSerializable + for<'de> Deserialize<'de>,
     {
         AnySerializable {
-            id: Cow::Borrowed(DeserializeRegistry::register::<T>()),
+            id: Cow::Borrowed(TypeRegistry::register::<T>()),
             data: Box::new(value),
         }
     }
@@ -205,7 +203,7 @@ impl<'de> Visitor<'de> for AnySerializableVisitor {
 
         let data: Vec<u8> = data.ok_or_else(|| Error::missing_field("data"))?;
 
-        match DeserializeRegistry::deserialize(&id, &data) {
+        match TypeRegistry::deserialize(&id, &data) {
             Ok(data) => Ok(AnySerializable { id, data }),
             Err(e) => Err(Error::custom(e)),
         }
@@ -218,12 +216,5 @@ impl<'de> Deserialize<'de> for AnySerializable {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_struct("AnySerializable", &["id", "data"], AnySerializableVisitor)
-    }
-}
-
-impl OperationParameters for AnySerializable {
-    #[inline]
-    fn as_parameters(&self) -> &dyn Any {
-        self.data.as_any()
     }
 }
