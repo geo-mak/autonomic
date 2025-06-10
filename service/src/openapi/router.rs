@@ -20,7 +20,7 @@ use autonomic_api::controller::ControllerService;
 
 use autonomic_controllers::controller::{ControllerInfo, OpState};
 use autonomic_controllers::errors::ControllerError;
-use autonomic_controllers::provider::ControllerManager;
+use autonomic_controllers::manager::ControllerManager;
 
 /// Creates a router instance with endpoints related to the controller service.
 ///
@@ -38,7 +38,7 @@ use autonomic_controllers::provider::ControllerManager;
 /// # Fallback Response
 /// - Status: `501`.
 /// - Body: `ControllerError::NotImplemented`.
-pub fn controller_router(provider: &'static ControllerManager) -> Router {
+pub fn controller_router(manager: &'static ControllerManager) -> Router {
     Router::new()
         .route("/ctrl_mgr/ctrl/:id", get(OpenAPIEndpoints::ctrl))
         .route("/ctrl_mgr/list", get(OpenAPIEndpoints::list))
@@ -58,7 +58,7 @@ pub fn controller_router(provider: &'static ControllerManager) -> Router {
             "/ctrl_mgr/stop_sensor/:id",
             post(OpenAPIEndpoints::stop_sensor),
         )
-        .layer(Extension(provider))
+        .layer(Extension(manager))
         .fallback(not_implemented)
 }
 
@@ -93,7 +93,7 @@ const SERVICE_LABEL: &str = "OpenAPIService";
 struct OpenAPIEndpoints;
 
 impl ControllerService for OpenAPIEndpoints {
-    type ServiceProvider = Extension<&'static ControllerManager>;
+    type ServiceManager = Extension<&'static ControllerManager>;
     type ServiceError = ServiceError;
     type ControllerID = Path<String>;
     type ControllerReturn = Json<ControllerInfo>;
@@ -112,14 +112,14 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200` and `Json<ControllerInfo>` as body: If the request was successful.
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn ctrl(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::ControllerReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = format!("Received HTTP request to get controller {}", id)
         );
-        match provider.controller(id.as_str()) {
+        match manager.controller(id.as_str()) {
             Ok(op_info) => Ok(Json(op_info)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -131,13 +131,13 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200` and `Json<Vec<ControllerInfo>>` as body: If the request was successful.
     /// - Status code `204` and `Json<ControllerError::NoResults>` as body: If there are no controllers.
     async fn list(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
     ) -> Result<Self::ControllersReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = "Received HTTP request to list controllers"
         );
-        match provider.list() {
+        match manager.list() {
             Ok(op_infos) => Ok(Json(op_infos)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -149,13 +149,13 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200` and `Json<Vec<String>>` as body: If the request was successful.
     /// - Status code `404` and `Json<ControllerError::NoActiveOps>` as body: If the controller is empty.
     async fn list_performing(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
     ) -> Result<Self::PerformingReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = "Received HTTP request to list controllers with performing operations"
         );
-        match provider.list_performing() {
+        match manager.list_performing() {
             Ok(ops) => Ok(Json(ops)),
             Err(err) => Err(ServiceError(err)),
         }
@@ -169,7 +169,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `409` and `Json<ControllerError::Active>` as body: If the operation is already active.
     /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the operation is locked.
     async fn perform(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::PerformReturn, Self::ServiceError> {
         trace_trace!(
@@ -179,7 +179,7 @@ impl ControllerService for OpenAPIEndpoints {
                 id
             )
         );
-        match provider.perform(id.as_str()) {
+        match manager.perform(id.as_str()) {
             Ok(watch_stream) => {
                 // Transform the stream to emit SSE events
                 // Full annotation is required here to avoid type inference issues
@@ -210,7 +210,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200`: if request was successful.
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn abort(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::AbortReturn, Self::ServiceError> {
         trace_trace!(
@@ -220,7 +220,7 @@ impl ControllerService for OpenAPIEndpoints {
                 id
             )
         );
-        match provider.abort(id.as_str()) {
+        match manager.abort(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -232,14 +232,14 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200`: if request was successful.
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn lock(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::LockReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = format!("Received HTTP request to lock the controller {}", id)
         );
-        match provider.lock(id.as_str()) {
+        match manager.lock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -250,14 +250,14 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200`: if request was successful.
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn unlock(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::UnlockReturn, Self::ServiceError> {
         trace_trace!(
             source = SERVICE_LABEL,
             message = format!("Received HTTP request to unlock the controller {}", id)
         );
-        match provider.unlock(id.as_str()) {
+        match manager.unlock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -271,7 +271,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `409` and `Json<ControllerError::Active>` as body: If the sensor is already active.
     /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the controller is locked.
     async fn start_sensor(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::StartSensorReturn, Self::ServiceError> {
         trace_trace!(
@@ -281,7 +281,7 @@ impl ControllerService for OpenAPIEndpoints {
                 id
             )
         );
-        match provider.start_sensor(id.as_str()) {
+        match manager.start_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -293,7 +293,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `200`: if request was successful.
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     async fn stop_sensor(
-        Extension(provider): Self::ServiceProvider,
+        Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::StopSensorReturn, Self::ServiceError> {
         trace_trace!(
@@ -303,7 +303,7 @@ impl ControllerService for OpenAPIEndpoints {
                 id
             )
         );
-        match provider.stop_sensor(id.as_str()) {
+        match manager.stop_sensor(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
         }
@@ -324,7 +324,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
 
     use autonomic_controllers::controller::OpState;
-    use autonomic_controllers::provider::ControllerManager;
+    use autonomic_controllers::manager::ControllerManager;
 
     use autonomic_controllers::testkit::controller::TestController;
     use autonomic_events::testkit::global::init_tracing;
@@ -332,9 +332,9 @@ mod tests {
     #[tokio::test]
     async fn test_fallback() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let response = router
             .oneshot(
@@ -362,14 +362,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_ctrl() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, None, 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let request = Request::builder()
             .uri(format!("/ctrl_mgr/ctrl/{}", controller_id))
@@ -395,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_ctrls() {
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_1_id = "test_controller_1";
         let controller_2_id = "test_controller_2";
@@ -405,11 +405,11 @@ mod tests {
         let controller_2 = TestController::ok(controller_2_id, None, 0);
         let controller_3 = TestController::ok(controller_3_id, None, 0);
 
-        provider.submit(controller_1);
-        provider.submit(controller_2);
-        provider.submit(controller_3);
+        manager.submit(controller_1);
+        manager.submit(controller_2);
+        manager.submit(controller_3);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let response = router
             .oneshot(
@@ -446,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_perf_ctrl() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let active_controller_id = "active_ctrl";
         let active_ctrl =
@@ -455,11 +455,11 @@ mod tests {
         let inactive_controller_id = "inactive_ctrl";
         let inactive_ctrl = TestController::ok(inactive_controller_id, None, 0);
 
-        provider.submit(active_ctrl);
+        manager.submit(active_ctrl);
 
-        provider.submit(inactive_ctrl);
+        manager.submit(inactive_ctrl);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         // Test when no operations are active
         let response = router
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(error, ControllerError::NoResults);
 
         // Activate the operation
-        provider.perform(&active_controller_id).unwrap();
+        manager.perform(&active_controller_id).unwrap();
 
         // Operation execution is delayed for 10 millis, so it should be still active when we check
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -515,14 +515,14 @@ mod tests {
     #[tokio::test]
     async fn test_perform() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, None, 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let response = router
             .oneshot(
@@ -570,25 +570,25 @@ mod tests {
     #[tokio::test]
     async fn test_abort_ctrl() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
 
         // Duration is high to make sure abort is working as espected.
         let controller = TestController::ok(controller_id, Some(Duration::from_secs(10)), 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
         // Activate the operation
-        provider.perform(&controller_id).unwrap();
+        manager.perform(&controller_id).unwrap();
 
         // Wait some time for activation to take place
         tokio::time::sleep(Duration::from_millis(2)).await;
 
         // Operation must be active by now
-        assert!(provider.is_performing(&controller_id).unwrap());
+        assert!(manager.is_performing(&controller_id).unwrap());
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         // Abort request
         let response = router
@@ -609,20 +609,20 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2)).await;
 
         // Operation must have been deactivated
-        assert!(!provider.is_performing(&controller_id).unwrap());
+        assert!(!manager.is_performing(&controller_id).unwrap());
     }
 
     #[tokio::test]
     async fn test_lock_ctrl() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, None, 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         // Lock request
         let response = router
@@ -640,23 +640,23 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Operation must have been locked
-        assert!(provider.is_locked(&controller_id).unwrap());
+        assert!(manager.is_locked(&controller_id).unwrap());
     }
 
     #[tokio::test]
     async fn test_unlock_ctrl() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, None, 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
         // Lock the operation
-        provider.lock(controller_id).unwrap();
+        manager.lock(controller_id).unwrap();
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         // Unlock request
         let response = router
@@ -674,20 +674,20 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Controller must have been unlocked
-        assert!(!provider.is_locked(&controller_id).unwrap());
+        assert!(!manager.is_locked(&controller_id).unwrap());
     }
 
     #[tokio::test]
     async fn test_start_sensor() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, Some(Duration::from_millis(10)), 0);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let response = &router
             .oneshot(
@@ -708,29 +708,29 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         // Sensor must be active by now
-        assert!(provider.sensing(&controller_id).unwrap());
+        assert!(manager.sensing(&controller_id).unwrap());
     }
 
     #[tokio::test]
     async fn test_stop_sensor() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller_id = "test_controller";
         let controller = TestController::ok(controller_id, Some(Duration::from_millis(10)), 1);
 
-        provider.submit(controller);
+        manager.submit(controller);
 
         // Active sensor in controller
-        provider.start_sensor(&controller_id).unwrap();
+        manager.start_sensor(&controller_id).unwrap();
 
         // Wait some time for activation to take place
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Sensor must be active by now
-        assert!(provider.sensing(&controller_id).unwrap());
+        assert!(manager.sensing(&controller_id).unwrap());
 
-        let router = controller_router(provider);
+        let router = controller_router(manager);
 
         let response = &router
             .oneshot(
@@ -751,6 +751,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(5)).await;
 
         // Sensor must have been deactivated
-        assert!(!provider.sensing(&controller_id).unwrap());
+        assert!(!manager.sensing(&controller_id).unwrap());
     }
 }

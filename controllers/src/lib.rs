@@ -4,7 +4,7 @@ mod tests;
 // Public
 pub mod controller;
 pub mod errors;
-pub mod provider;
+pub mod manager;
 
 #[cfg(feature = "testkit")]
 pub mod testkit;

@@ -7,7 +7,7 @@ use serde_json::{from_str, to_string};
 use autonomic_events::testkit::global::init_tracing;
 
 use crate::controller::{ControllerInfo, OpState};
-use crate::provider::ControllerManager;
+use crate::manager::ControllerManager;
 use crate::testkit::controller::TestController;
 
 #[cfg(test)]
@@ -54,7 +54,7 @@ mod tests_serde {
 }
 
 #[cfg(test)]
-mod tests_ctrl_provider {
+mod tests_ctrl_manager {
     use crate::controller::Controller;
 
     use super::*;
@@ -64,21 +64,21 @@ mod tests_ctrl_provider {
 
     #[test]
     fn test_submit() {
-        let mut provider = ControllerManager::new();
+        let mut manager = ControllerManager::new();
         let controller = TestController::ok(CTRL_ID, None, 0);
-        provider.submit(controller);
-        assert_eq!(provider.count(), 1);
+        manager.submit(controller);
+        assert_eq!(manager.count(), 1);
     }
 
     #[tokio::test]
     async fn test_preform() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
         let controller = TestController::ok(CTRL_ID, None, 0);
         let ctrl_id = controller.id();
 
-        provider.submit(controller);
-        match provider.perform(ctrl_id) {
+        manager.submit(controller);
+        match manager.perform(ctrl_id) {
             Ok(mut watch_stream) => {
                 let mut last_state: Option<OpState> = None;
                 while let Some(state) = watch_stream.next().await {
@@ -96,26 +96,26 @@ mod tests_ctrl_provider {
     #[tokio::test]
     async fn test_sensor() {
         init_tracing();
-        let provider = ControllerManager::new().into_static();
+        let manager = ControllerManager::new().into_static();
 
         let controller = TestController::ok(CTRL_ID, None, 1);
         let id = controller.id();
 
-        provider.submit(controller);
+        manager.submit(controller);
 
-        assert!(!provider.sensing(&id).unwrap());
-        assert!(!provider.is_performing(&id).unwrap());
+        assert!(!manager.sensing(&id).unwrap());
+        assert!(!manager.is_performing(&id).unwrap());
 
-        provider.start_sensor(&id).unwrap();
+        manager.start_sensor(&id).unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
 
         // Sensing should be active
-        assert!(provider.sensing(&id).unwrap());
-        provider.stop_sensor(&id).unwrap();
+        assert!(manager.sensing(&id).unwrap());
+        manager.stop_sensor(&id).unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
 
         // Neither sensor nor operation should be active now.
-        assert!(!provider.sensing(&id).unwrap());
-        assert!(!provider.is_performing(&id).unwrap());
+        assert!(!manager.sensing(&id).unwrap());
+        assert!(!manager.is_performing(&id).unwrap());
     }
 }

@@ -1,5 +1,5 @@
 pub trait ControllerService {
-    type ServiceProvider;
+    type ServiceManager;
     type ServiceError;
     type ControllerID;
     type ControllerReturn;
@@ -13,45 +13,45 @@ pub trait ControllerService {
     type StopSensorReturn;
 
     fn ctrl(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::ControllerReturn, Self::ServiceError>> + Send;
 
     fn list(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
     ) -> impl Future<Output = Result<Self::ControllersReturn, Self::ServiceError>> + Send;
 
     fn list_performing(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
     ) -> impl Future<Output = Result<Self::PerformingReturn, Self::ServiceError>> + Send;
 
     fn perform(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::PerformReturn, Self::ServiceError>> + Send;
 
     fn abort(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::AbortReturn, Self::ServiceError>> + Send;
 
     fn lock(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::AbortReturn, Self::ServiceError>> + Send;
 
     fn unlock(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::AbortReturn, Self::ServiceError>> + Send;
 
     fn start_sensor(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::StartSensorReturn, Self::ServiceError>> + Send;
 
     fn stop_sensor(
-        provider: Self::ServiceProvider,
+        manager: Self::ServiceManager,
         id: Self::ControllerID,
     ) -> impl Future<Output = Result<Self::StopSensorReturn, Self::ServiceError>> + Send;
 }
