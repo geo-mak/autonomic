@@ -1,11 +1,8 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fmt::{Debug, Display};
-use std::pin::Pin;
-use std::sync::Mutex;
-use std::sync::atomic::Ordering::{Acquire, Release, SeqCst};
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::atomic::{AtomicBool, AtomicU8};
-use std::task::{Context, Poll, Waker};
 
 use futures_util::FutureExt;
 use tokio::sync::watch::{self, Receiver};
@@ -14,58 +11,8 @@ use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
+use autonomic_core::sync::{Notification, Signal};
 use autonomic_events::{trace_error, trace_info, trace_trace, trace_warn};
-
-// Notification signal for single waiter.
-// Only the last waiter is notified.
-pub struct Signal {
-    notified: AtomicBool,
-    waker: Mutex<Option<Waker>>,
-}
-
-impl Signal {
-    #[inline]
-    pub const fn new() -> Self {
-        Self {
-            notified: AtomicBool::new(false),
-            waker: Mutex::new(None),
-        }
-    }
-
-    /// Notify the waiter (if any).
-    /// If no waiter is currently waiting, set the flag so the next waiter wakes immediately.
-    pub fn notify(&self) {
-        self.notified.store(true, Release);
-        if let Some(waker) = self.waker.lock().unwrap().take() {
-            waker.wake();
-        }
-    }
-
-    /// Returns a Future that waits for the next notification.
-    /// It supports repeated calls.
-    #[inline(always)]
-    pub const fn notified(&self) -> Notification<'_> {
-        Notification { notify: self }
-    }
-}
-
-pub struct Notification<'a> {
-    notify: &'a Signal,
-}
-
-impl Future for Notification<'_> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.notify.notified.swap(false, Acquire) {
-            Poll::Ready(())
-        } else {
-            let mut waker_lock = self.notify.waker.lock().unwrap();
-            *waker_lock = Some(cx.waker().clone());
-            Poll::Pending
-        }
-    }
-}
 
 /// Exposes services and signals provided by the manager.
 pub struct ControlContext {

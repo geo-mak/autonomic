@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "api",
+    "core",
     "serde",
     "controllers",
     "service",
@@ -20,6 +21,7 @@ repository = "https://github.com/geo-mak/autonomic"
 
 [workspace.dependencies]
 autonomic_api = { path = "api" }
+autonomic_core = { path = "core"}
 autonomic_serde = { path = "serde"}
 autonomic_controllers = { path = "controllers" }
 autonomic_events = { path = "events" }
