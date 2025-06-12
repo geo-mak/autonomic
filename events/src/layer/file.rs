@@ -231,7 +231,7 @@ impl<'a, T> Drop for OnExit<'a, T> {
         // Set to disabled to prevent recording.
         self.state.enabled.store(false, Ordering::Release);
 
-        // Some garbage collection.
+        // Some garbage collection (currently).
         let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
         let active_buf = unsafe { &mut *active_ptr };
         active_buf.clear();
@@ -244,18 +244,27 @@ impl<'a, T> Drop for OnExit<'a, T> {
     }
 }
 
-// Reverts the pointer to its original value on early return.
-struct AtomicPtrGuard<'a, T> {
-    ptr: &'a AtomicPtr<Vec<T>>,
-    origin: *mut Vec<T>,
+// Reverts the pointers to their original values on early return.
+struct AtomicSwapGuard<'a, T> {
+    origin_active: *mut Vec<T>,
+    active_ptr: &'a AtomicPtr<Vec<T>>,
+    origin_swap: *mut Vec<T>,
+    swap_ptr: &'a AtomicPtr<Vec<T>>,
 }
 
-impl<'a, T> AtomicPtrGuard<'a, T> {
+impl<'a, T> AtomicSwapGuard<'a, T> {
     #[inline(always)]
-    const fn set(ptr: &'a AtomicPtr<Vec<T>>, original: *mut Vec<T>) -> Self {
+    const fn set(
+        origin_active: *mut Vec<T>,
+        active_ptr: &'a AtomicPtr<Vec<T>>,
+        origin_swap: *mut Vec<T>,
+        swap_ptr: &'a AtomicPtr<Vec<T>>,
+    ) -> Self {
         Self {
-            ptr,
-            origin: original,
+            origin_active,
+            active_ptr,
+            origin_swap,
+            swap_ptr,
         }
     }
 
@@ -265,9 +274,10 @@ impl<'a, T> AtomicPtrGuard<'a, T> {
     }
 }
 
-impl<'a, T> Drop for AtomicPtrGuard<'a, T> {
+impl<'a, T> Drop for AtomicSwapGuard<'a, T> {
     fn drop(&mut self) {
-        self.ptr.store(self.origin, Ordering::Release);
+        self.active_ptr.store(self.origin_active, Ordering::Release);
+        self.swap_ptr.store(self.origin_swap, Ordering::Release);
     }
 }
 
@@ -352,6 +362,9 @@ where
         instance.with_filter(CallSiteFilter::new())
     }
 
+    // TODO: gracefull shoutdown is not implemented.
+    // The current implementation assumes the exit to be either forced abort because of panic,
+    // or write error incidences.
     fn start_writer(
         directory: PathBuf,
         interval: Duration,
@@ -371,22 +384,10 @@ where
                     _ = state.sig_write.notified() => {},
                 };
 
-                // Swap active pointer so new events shall be written to the swap buffer.
-                let swap_ptr = state.swap_ptr.load(Ordering::Acquire);
-                let active_ptr = state.active_ptr.swap(swap_ptr, Ordering::AcqRel);
-
-                // Guard to revert active_ptr if panic occurs before full swap.
-                // Note: Layer will be likely a onetime setup and running in `main`,
-                // so this could be considered an extra caution.
-                let ptr_guard = AtomicPtrGuard::set(&state.active_ptr, active_ptr);
-
-                state.swap_ptr.store(active_ptr, Ordering::Release);
-
-                // Full swap. Finish.
-                ptr_guard.finish();
+                let prev_active = Self::protected_swap(&state);
 
                 // This buffer is now offline with the old events.
-                let buffer = unsafe { &mut *active_ptr };
+                let buffer = unsafe { &mut *prev_active };
 
                 if let Err(e) = F::write(buffer, &directory).await {
                     // Recording will be disabled by "OnExit" guard when dropped.
@@ -401,6 +402,26 @@ where
                 buffer.clear();
             }
         });
+    }
+
+    #[inline]
+    fn protected_swap(state: &SharedState<F::BufferType>) -> *mut Vec<F::BufferType> {
+        let origin_active = state.active_ptr.load(Ordering::Acquire);
+        let origin_swap = state.swap_ptr.load(Ordering::Acquire);
+
+        let swap_guard = AtomicSwapGuard::set(
+            origin_active,
+            &state.active_ptr,
+            origin_swap,
+            &state.swap_ptr,
+        );
+
+        state.active_ptr.store(origin_swap, Ordering::Release);
+        state.swap_ptr.store(origin_active, Ordering::Release);
+        
+        swap_guard.finish();
+
+        origin_active
     }
 }
 
@@ -546,6 +567,7 @@ mod tests {
 
         let store_data = store.inner().data.clone();
         let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
 
@@ -617,6 +639,7 @@ mod tests {
         assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
 
         let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
         assert!(unsafe { &*active_ptr }.is_empty());
         assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
 
@@ -635,6 +658,7 @@ mod tests {
 
         let store_data = store.inner().data.clone();
         let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
 
@@ -716,6 +740,7 @@ mod tests {
         assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
 
         let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
         assert!(unsafe { &*active_ptr }.is_empty());
         assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
 
