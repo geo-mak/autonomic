@@ -91,7 +91,7 @@ where
 /// # Type Parameters
 /// - `S`: The tracing subscriber that accepts `Filtered` types as layers.
 /// - `R`: The recorder type that filters and records events.
-///        If not provided, `DefaultRecorder<PublisherDirective>` is used by default.
+///   If not provided, `DefaultRecorder<PublisherDirective>` is used by default.
 pub struct EventPublisher<S, R = DefaultRecorder<PublisherDirective>>
 where
     S: Subscriber,
@@ -124,7 +124,6 @@ where
     /// use autonomic_events::layer::publisher::{EventChannel, EventPublisher};
     /// use autonomic_events::record::DefaultEvent;
     ///
-    /// fn main() {
     ///  // A new publisher with the default recorder and directive
     ///  let publisher = EventPublisher::<Registry>::new(16);
     ///  // A reference to channel before transforming publisher into layer
@@ -133,7 +132,6 @@ where
     ///  let tracing_subscriber = Registry::default().with(publisher.into_layer());
     ///  // New subscriber to publisher's channel
     ///  let mut events_receiver = channel.subscribe();
-    /// }
     /// ```
     pub fn new(buffer: usize) -> Self {
         Self {

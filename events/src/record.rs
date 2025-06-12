@@ -160,7 +160,7 @@ impl RecorderDirective for DefaultDirective {
 ///
 /// # Type Parameters
 /// - `T`: The directive type that checks if the recorder is enabled based on the current metadata.
-/// If not provided, `DefaultDirective` is used by default.
+///   If not provided, `DefaultDirective` is used by default.
 ///
 /// > **Note**: Directive is intended to be used as _lightweight condition_ in `Layer<S>`
 /// > or `Filter<S>` types.

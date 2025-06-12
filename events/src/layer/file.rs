@@ -1,20 +1,22 @@
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::mem::ManuallyDrop;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
 
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::{Mutex, Notify};
 
 use tracing::{Event, Subscriber};
 
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
+
+use autonomic_core::sync::Signal;
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
@@ -72,7 +74,7 @@ impl EventWriter for CSVFormat {
     /// # Returns
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
-    async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
+    async fn write(buffer: &[Self::BufferType], file_path: &Path) -> tokio::io::Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -143,7 +145,7 @@ impl EventWriter for JSONFormat {
     /// # Returns
     /// - `Ok(())`: if the write operation is successful.
     /// - `Err(io::Error)`: if the write operation has failed.
-    async fn write(buffer: &[Self::BufferType], file_path: &PathBuf) -> tokio::io::Result<()> {
+    async fn write(buffer: &[Self::BufferType], file_path: &Path) -> tokio::io::Result<()> {
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -159,7 +161,7 @@ impl EventWriter for JSONFormat {
             // Skip the first comma and newline characters
             buffer = &buffer[2..];
         } else {
-            let mut buf: Vec<u8> = vec![0; 1];
+            let mut buf = [0; 1];
             // Move to the last character
             file.seek(tokio::io::SeekFrom::End(-1)).await?;
             file.read_exact(&mut buf).await?;
@@ -187,13 +189,86 @@ impl FileExtension for JSONFormat {
     }
 }
 
-struct StoreData<T> {
-    // Async `Mutex` is required because there is no guarantee that
-    // the locking-time could be near-instant.
-    buffer: Mutex<Vec<T>>,
-    capacity: u32,
-    write_alert: Notify,
-    guard: AtomicBool,
+/// The shared data of the file store.+
+/// Note: Drop implementation always assume successful swapping.
+/// Swapping shall be guarded to avoid double-free, although this is unlikely to be the case,
+/// because the layer will likely to be one-time setup and running on the main thread.
+struct SharedState<T> {
+    active_ptr: AtomicPtr<Vec<T>>,
+    swap_ptr: AtomicPtr<Vec<T>>,
+    enabled: AtomicBool,
+    sig_write: Signal,
+    limit: usize,
+}
+
+impl<T> Drop for SharedState<T> {
+    fn drop(&mut self) {
+        let active_ptr = self.active_ptr.load(Ordering::Acquire);
+        let swap_ptr = self.swap_ptr.load(Ordering::Acquire);
+        // Safety: active_ptr is assumed to be protected by reverting guard.
+        // becuase, there is a risk of double-free (active_ptr = swap_ptr) if the swap was partial.
+        unsafe {
+            drop(Box::from_raw(swap_ptr));
+            drop(Box::from_raw(active_ptr));
+        }
+    }
+}
+
+/// Protects the shared state from being accessed, when its managing task is aborted or exited.
+struct OnExit<'a, T> {
+    state: &'a SharedState<T>,
+}
+
+impl<'a, T> OnExit<'a, T> {
+    #[inline(always)]
+    const fn set(state: &'a SharedState<T>) -> Self {
+        Self { state }
+    }
+}
+
+impl<'a, T> Drop for OnExit<'a, T> {
+    fn drop(&mut self) {
+        // Set to disabled to prevent recording.
+        self.state.enabled.store(false, Ordering::Release);
+
+        // Some garbage collection.
+        let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
+        let active_buf = unsafe { &mut *active_ptr };
+        active_buf.clear();
+        active_buf.shrink_to_fit();
+
+        let swap_ptr = self.state.swap_ptr.load(Ordering::Acquire);
+        let swap_buf = unsafe { &mut *swap_ptr };
+        swap_buf.clear();
+        swap_buf.shrink_to_fit();
+    }
+}
+
+// Reverts the pointer to its original value on early return.
+struct AtomicPtrGuard<'a, T> {
+    ptr: &'a AtomicPtr<Vec<T>>,
+    origin: *mut Vec<T>,
+}
+
+impl<'a, T> AtomicPtrGuard<'a, T> {
+    #[inline(always)]
+    const fn set(ptr: &'a AtomicPtr<Vec<T>>, original: *mut Vec<T>) -> Self {
+        Self {
+            ptr,
+            origin: original,
+        }
+    }
+
+    #[inline(always)]
+    const fn finish(self) {
+        let _ = ManuallyDrop::new(self);
+    }
+}
+
+impl<'a, T> Drop for AtomicPtrGuard<'a, T> {
+    fn drop(&mut self) {
+        self.ptr.store(self.origin, Ordering::Release);
+    }
 }
 
 /// File storage layer for tracing subscribers with memory buffer.
@@ -222,17 +297,17 @@ struct StoreData<T> {
 /// to avoid repeated checks and improve performance.
 ///
 /// Filtering results are only valid for this layer, and they don't affect other layers.
-pub struct BufferedFileStore<S, F>
+pub struct EventsFileStore<S, F>
 where
     S: Subscriber,
     F: FileStoreFormat,
 {
-    _subscriber: PhantomData<S>,
-    _format: PhantomData<F>,
-    data: Arc<StoreData<u8>>,
+    data: Arc<SharedState<u8>>,
+    _s: PhantomData<S>,
+    _f: PhantomData<F>,
 }
 
-impl<S, F> BufferedFileStore<S, F>
+impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
     F: FileStoreFormat<Output = Vec<u8>, BufferType = u8> + 'static,
@@ -240,108 +315,96 @@ where
     /// Creates new BufferedFileStore.
     ///
     /// # Parameters
-    /// - `directory`: The directory where events files shall be stored.
-    /// - `write_interval`: The waiting period before writing events to file.
-    /// - `capacity`: The max size of the buffer in `bytes` to trigger writing.
-    /// - `allocate`: If true, the buffer will pre-allocate memory for `capacity` bytes.
+    /// - `dir`: The directory where events files shall be stored.
+    /// - `interval`: The waiting period before writing events to file.
+    /// - `limit`: The allowed size of the buffer in `bytes` before forcing writing.
     ///
     /// # Returns
-    /// The store fused with its filter as `Filtered` type.
+    /// The store fused with its filter as `Filtered` layer.
     pub fn new(
-        mut directory: PathBuf,
-        write_interval: Duration,
-        capacity: u32,
-        allocate: bool,
-    ) -> Filtered<BufferedFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
-        let data = Arc::new(StoreData {
-            buffer: Mutex::new(if allocate {
-                Vec::with_capacity(capacity as usize)
-            } else {
-                Vec::new()
-            }),
-            guard: AtomicBool::new(false),
-            write_alert: Notify::new(),
-            capacity,
+        mut dir: PathBuf,
+        interval: Duration,
+        limit: u32,
+    ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
+        let active_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
+        let swap_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
+
+        let data = Arc::new(SharedState {
+            active_ptr: AtomicPtr::new(active_ptr),
+            swap_ptr: AtomicPtr::new(swap_ptr),
+            enabled: AtomicBool::new(true),
+            sig_write: Signal::new(),
+            limit: limit as usize,
         });
 
         let instance = Self {
-            _subscriber: PhantomData,
-            _format: PhantomData,
             data: data.clone(),
+            _s: PhantomData,
+            _f: PhantomData,
         };
 
-        directory.push("events");
-        directory.set_extension(F::extension());
+        // TODO: Add writing options for writing events to multiple files.
+        dir.push("events");
+        dir.set_extension(F::extension());
 
-        Self::write(directory, write_interval, data);
+        Self::start_writer(dir, interval, data);
 
         instance.with_filter(CallSiteFilter::new())
     }
 
-    fn write(directory: PathBuf, write_interval: Duration, data: Arc<StoreData<F::BufferType>>) {
+    fn start_writer(
+        directory: PathBuf,
+        interval: Duration,
+        state: Arc<SharedState<F::BufferType>>,
+    ) {
         tokio::spawn(async move {
+            let _on_exit = OnExit::set(&state);
             loop {
-                // Mutex guard acquired here
-                let mut buffer = tokio::select! {
-                    _ = tokio::time::sleep(write_interval) =>
-                    {
-                        let buffer = data.buffer.lock().await;
-                        if buffer.is_empty() {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {
+                        let active_ptr = state.active_ptr.load(Ordering::Acquire);
+                        if unsafe { &mut *active_ptr }.is_empty() {
+                            // Don't leave the thread.
                             continue;
-                        };
-                        buffer
+                        }
                     },
-                    _ = data.write_alert.notified() => {
-                        data.buffer.lock().await
-                    }
+                    _ = state.sig_write.notified() => {},
                 };
 
-                if let Err(e) = F::write(&buffer, &directory).await {
-                    // Activate the guard to prevent new recordings
-                    data.guard.store(true, Ordering::Release);
-                    // Note: Waiters before the activation of the guard,
-                    // will be able to write to the buffer when current lock is released.
+                // Swap active pointer so new events shall be written to the swap buffer.
+                let swap_ptr = state.swap_ptr.load(Ordering::Acquire);
+                let active_ptr = state.active_ptr.swap(swap_ptr, Ordering::AcqRel);
 
-                    // Release the current lock or it will deadlock.
-                    drop(buffer);
+                // Guard to revert active_ptr if panic occurs before full swap.
+                // Note: Layer will be likely a onetime setup and running in `main`,
+                // so this could be considered an extra caution.
+                let ptr_guard = AtomicPtrGuard::set(&state.active_ptr, active_ptr);
 
-                    // TODO: No strategy for dealing with current data in the buffer.
-                    // Acquire the lock again as the last waiter this time
-                    let mut buffer = data.buffer.lock().await;
-                    buffer.clear();
-                    buffer.shrink_to(0);
-                    // Propagate the event for other subscribers
+                state.swap_ptr.store(active_ptr, Ordering::Release);
+
+                // Full swap. Finish.
+                ptr_guard.finish();
+
+                // This buffer is now offline with the old events.
+                let buffer = unsafe { &mut *active_ptr };
+
+                if let Err(e) = F::write(buffer, &directory).await {
+                    // Recording will be disabled by "OnExit" guard when dropped.
                     trace_error!(
-                        source = "BufferedFileStore",
+                        source = "EventsFileStore",
                         message = format!("Stopped: {}", e)
                     );
                     return;
-                };
+                }
 
+                // Clear the flushed buffer.
                 buffer.clear();
-            }
-        });
-    }
-
-    #[inline]
-    fn record(&self, mut record: F::Output) {
-        let data_ref = self.data.clone();
-        tokio::spawn(async move {
-            let mut buffer = data_ref.buffer.lock().await;
-            // During waiting to acquire the lock, the guard might have been activated,
-            // but we let it write without rechecking anyway. Only new recordings will be skipped.
-            buffer.append(&mut record);
-            // This check must be done only after acquiring the lock and after pushing the event
-            if buffer.len() >= data_ref.capacity as usize {
-                // If the writer task is sleeping, it will wake up waiting for the lock to write the buffer,
-                // otherwise, it will write the buffer as soon as it acquires the lock.
-                data_ref.write_alert.notify_one();
             }
         });
     }
 }
 
-impl<S, F> Layer<S> for BufferedFileStore<S, F>
+impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
     F: FileStoreFormat<Output = Vec<u8>, BufferType = u8> + 'static,
@@ -350,17 +413,28 @@ where
     // > It can't be done in layer using method `register_callsite`, because it will disable it
     // globally for all layers, and this is the only reason why layer is fused with the filter.
 
-    // This method is called before `on_event` and doesn't disable recording permanently
+    // This method is called before `on_event` and doesn't disable recording permanently.
     #[inline]
     fn event_enabled(&self, _event: &Event<'_>, _ctx: Context<'_, S>) -> bool {
-        // Active guard means that writer has stopped,
-        // so no recording should be done to avoid buffer overflow
-        !self.data.guard.load(Ordering::Acquire)
+        self.data.enabled.load(Ordering::Acquire)
     }
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        self.record(F::record(event));
+        // TODO: Recording each event with new visitor is a bottleneck.
+        let mut record = F::record(event);
+
+        let active_ptr = self.data.active_ptr.load(Ordering::Acquire);
+        let buffer = unsafe { &mut *active_ptr };
+
+        // Bitwise non-overlaping copy.
+        buffer.append(&mut record);
+
+        // If writing is taking too long and blocking the observer, the same buffer will
+        // continue to be used until the sent notification is observed, even if over the limit,
+        if buffer.len() >= self.data.limit {
+            self.data.sig_write.notify();
+        }
     }
 }
 
@@ -378,14 +452,100 @@ mod tests {
 
     use crate::{trace_error, trace_info};
 
+    // Mock file format that simulates a write error
+    struct MockFileFormat<const PANIC: bool>;
+
+    impl<const PANIC: bool> FileStoreFormat for MockFileFormat<PANIC> {}
+
+    impl<const PANIC: bool> FileExtension for MockFileFormat<PANIC> {
+        fn extension() -> &'static str {
+            "mock"
+        }
+    }
+
+    impl<const PANIC: bool> EventWriter for MockFileFormat<PANIC> {
+        type BufferType = u8;
+
+        async fn write(_buffer: &[Self::BufferType], _file_path: &Path) -> tokio::io::Result<()> {
+            if PANIC {
+                panic!("Writer thread has panicked")
+            } else {
+                Err(tokio::io::Error::new(
+                    tokio::io::ErrorKind::Other,
+                    "Simulated write error",
+                ))
+            }
+        }
+    }
+
+    impl<const PANIC: bool> EventRecorder for MockFileFormat<PANIC> {
+        type Directive = DefaultDirective;
+        type FieldsVisitor = DefaultEventVisitor;
+        type Output = Vec<u8>;
+
+        fn record(_event: &Event) -> Self::Output {
+            vec![1_u8] // Single byte
+        }
+    }
+
+    async fn test_events_file_store_error<const PANIC: bool>() {
+        let store = EventsFileStore::<Registry, MockFileFormat<PANIC>>::new(
+            PathBuf::from(""),
+            Duration::from_secs(60),
+            1,
+        );
+
+        let store_data = store.inner().data.clone();
+
+        let subscriber = Registry::default().with(store);
+
+        let _guard = subscriber::set_default(subscriber);
+
+        // Propagate event to trigger flushing the buffer.
+        trace_info!(source = "event 1", message = "info message");
+
+        // Wait some time for writing to be triggered.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Recording guard must have been activated as a result of the write error.
+        assert!(!store_data.enabled.load(Ordering::Acquire));
+
+        // Garbage collection must have been done.
+        // Before calling write, pointers were swapped.
+        let writing_ptr = store_data.swap_ptr.load(Ordering::Acquire);
+        assert!(unsafe { &*writing_ptr }.is_empty());
+        assert_eq!(unsafe { &*writing_ptr }.capacity(), 0);
+
+        let recording_ptr = store_data.active_ptr.load(Ordering::Acquire);
+
+        // Try to propagate another event.
+        trace_info!(source = "event 3", message = "info message");
+
+        // No recording should have been done.
+        assert!(unsafe { &*recording_ptr }.is_empty());
+        assert_eq!(unsafe { &*recording_ptr }.capacity(), 0);
+    }
+
     #[tokio::test]
-    async fn test_buffered_store_write_csv() {
-        let store = BufferedFileStore::<Registry, CSVFormat>::new(
+    async fn test_events_file_store_on_error() {
+        test_events_file_store_error::<false>().await;
+    }
+
+    #[tokio::test]
+    async fn test_events_file_store_on_panic() {
+        test_events_file_store_error::<true>().await;
+    }
+
+    #[tokio::test]
+    async fn test_events_file_store_write_csv() {
+        let store = EventsFileStore::<Registry, CSVFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60),
             198,
-            true,
         );
+
+        let store_data = store.inner().data.clone();
+        let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
 
@@ -446,19 +606,35 @@ mod tests {
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
+        // Recording must remain be enabled.
+        assert!(store_data.enabled.load(Ordering::Acquire));
+
+        // Both should be empty now, because the active written has been flushed,
+        // and swap is not yet used, but their capacity must not be 0.
+        let swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
+        assert_eq!(init_active_ptr, swap_ptr); // <- swap-proof.
+        assert!(unsafe { &*swap_ptr }.is_empty());
+        assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
+
+        let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        assert!(unsafe { &*active_ptr }.is_empty());
+        assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
+
         tokio::fs::remove_file(full_path)
             .await
             .expect("Failed to delete events file");
     }
 
     #[tokio::test]
-    async fn test_buffered_store_write_json() {
-        let store = BufferedFileStore::<Registry, JSONFormat>::new(
+    async fn test_events_file_store_write_json() {
+        let store = EventsFileStore::<Registry, JSONFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60),
             346,
-            true,
         );
+
+        let store_data = store.inner().data.clone();
+        let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
 
@@ -529,78 +705,22 @@ mod tests {
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
+        // Recording must remain be enabled.
+        assert!(store_data.enabled.load(Ordering::Acquire));
+
+        // Both should be empty now, because the active written has been flushed,
+        // and swap is not yet used, but their capacity must not be 0.
+        let swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
+        assert_eq!(init_active_ptr, swap_ptr); // <- swap-proof.
+        assert!(unsafe { &*swap_ptr }.is_empty());
+        assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
+
+        let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        assert!(unsafe { &*active_ptr }.is_empty());
+        assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
+
         tokio::fs::remove_file(full_path)
             .await
             .expect("Failed to delete events file");
-    }
-
-    // Mock file format that simulates a write error
-    struct MockFileFormat;
-
-    impl FileStoreFormat for MockFileFormat {}
-
-    impl FileExtension for MockFileFormat {
-        fn extension() -> &'static str {
-            "mock"
-        }
-    }
-
-    impl EventWriter for MockFileFormat {
-        type BufferType = u8;
-
-        async fn write(
-            _buffer: &[Self::BufferType],
-            _file_path: &PathBuf,
-        ) -> tokio::io::Result<()> {
-            Err(tokio::io::Error::new(
-                tokio::io::ErrorKind::Other,
-                "Simulated write error",
-            ))
-        }
-    }
-
-    impl EventRecorder for MockFileFormat {
-        type Directive = DefaultDirective;
-        type FieldsVisitor = DefaultEventVisitor;
-        type Output = Vec<u8>;
-
-        fn record(_event: &Event) -> Self::Output {
-            vec![1_u8] // Single byte
-        }
-    }
-
-    #[tokio::test]
-    async fn test_buffered_store_write_error_handling() {
-        let store = BufferedFileStore::<Registry, MockFileFormat>::new(
-            PathBuf::from(""),
-            Duration::from_secs(60),
-            1,
-            true,
-        );
-
-        let store_data = store.inner().data.clone();
-
-        let subscriber = Registry::default().with(store);
-
-        let _guard = subscriber::set_default(subscriber);
-
-        // Propagate event to trigger flushing the buffer
-        trace_info!(source = "event 1", message = "info message");
-
-        // Wait some time for writing to be triggered
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Recording guard must have been activated as a result of the write error
-        assert!(store_data.guard.load(Ordering::Acquire));
-
-        // Garbage collection must have been done
-        assert!(store_data.buffer.lock().await.is_empty());
-        assert_eq!(store_data.buffer.lock().await.capacity(), 0);
-
-        // Try to propagate another event
-        trace_info!(source = "event 3", message = "info message");
-
-        // No recording should have been done
-        assert!(store_data.buffer.lock().await.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::Path;
 
 use tracing::Event;
 
@@ -62,7 +62,7 @@ pub trait EventWriter {
     /// Returns a future that resolves to the result of the write operation.
     fn write(
         buffer: &[Self::BufferType],
-        file_path: &PathBuf,
+        file_path: &Path,
     ) -> impl Future<Output = tokio::io::Result<()>> + Send;
 }
 
