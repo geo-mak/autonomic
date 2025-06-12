@@ -31,7 +31,7 @@ impl FileStoreFormat for CSVFormat {}
 
 impl EventRecorder for CSVFormat {
     type Directive = DefaultDirective;
-    type FieldsVisitor = DefaultEventVisitor;
+
     type Output = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to CSV record.
@@ -106,7 +106,7 @@ impl FileStoreFormat for JSONFormat {}
 
 impl EventRecorder for JSONFormat {
     type Directive = DefaultDirective;
-    type FieldsVisitor = DefaultEventVisitor;
+
     type Output = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to a JSON object.
@@ -189,7 +189,7 @@ impl FileExtension for JSONFormat {
     }
 }
 
-/// The shared data of the file store.+
+/// The shared data of the file store.
 /// Note: Drop implementation always assume successful swapping.
 /// Swapping shall be guarded to avoid double-free, although this is unlikely to be the case,
 /// because the layer will likely to be one-time setup and running on the main thread.
@@ -480,7 +480,7 @@ mod tests {
 
     impl<const PANIC: bool> EventRecorder for MockFileFormat<PANIC> {
         type Directive = DefaultDirective;
-        type FieldsVisitor = DefaultEventVisitor;
+
         type Output = Vec<u8>;
 
         fn record(_event: &Event) -> Self::Output {
@@ -606,7 +606,7 @@ mod tests {
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
-        // Recording must remain be enabled.
+        // Recording must remain enabled.
         assert!(store_data.enabled.load(Ordering::Acquire));
 
         // Both should be empty now, because the active written has been flushed,
@@ -705,7 +705,7 @@ mod tests {
         assert!(info_found, "INFO entry not found or schema mismatch");
         assert!(error_found, "ERROR entry not found or schema mismatch");
 
-        // Recording must remain be enabled.
+        // Recording must remain enabled.
         assert!(store_data.enabled.load(Ordering::Acquire));
 
         // Both should be empty now, because the active written has been flushed,

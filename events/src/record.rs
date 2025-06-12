@@ -179,7 +179,7 @@ where
     T: RecorderDirective,
 {
     type Directive = T;
-    type FieldsVisitor = DefaultEventVisitor;
+
     type Output = DefaultEvent;
 
     /// Records the fields in the event and returns recorded fields as `DefaultEvent`.

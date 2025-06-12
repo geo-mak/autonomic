@@ -4,7 +4,6 @@ use std::path::Path;
 use tracing::Event;
 
 use tracing_core::Metadata;
-use tracing_core::field::Visit;
 
 /// Trait representing a recorder directive.
 ///
@@ -42,9 +41,6 @@ pub trait RecorderDirective {
 pub trait EventRecorder {
     /// The directive type that checks if the recorder is enabled based on the current metadata.
     type Directive: RecorderDirective;
-
-    /// The visitor type that visits and records required fields.
-    type FieldsVisitor: Visit;
 
     /// The output type after recording.
     type Output: Clone; // Clone is necessary to support some async contexts
