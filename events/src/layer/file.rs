@@ -362,7 +362,7 @@ where
         instance.with_filter(CallSiteFilter::new())
     }
 
-    // TODO: gracefull shoutdown is not implemented.
+    // TODO: Graceful shoutdown is not implemented.
     // The current implementation assumes the exit to be either forced abort because of panic,
     // or write error incidences.
     fn start_writer(
