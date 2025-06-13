@@ -190,9 +190,15 @@ impl FileExtension for JSONFormat {
 }
 
 /// The shared data of the file store.
-/// Note: Drop implementation always assume successful swapping.
-/// Swapping shall be guarded to avoid double-free, although this is unlikely to be the case,
-/// because the layer will likely to be one-time setup and running on the main thread.
+///
+/// # Safety
+///
+/// - The atomic pointers maintain stability with safe dereferencing at any point of time,
+///   but the inner pointers of the buffers are unstable and unsafe to access any point of time,
+///   because their location will be mutated if the buffers are forced to adjust their capacity.
+///
+/// - The `Drop` implementation always assume successful swapping, where the atomic pointers are not
+///   identical when drop could be called.
 struct SharedState<T> {
     active_ptr: AtomicPtr<Vec<T>>,
     swap_ptr: AtomicPtr<Vec<T>>,
@@ -205,8 +211,6 @@ impl<T> Drop for SharedState<T> {
     fn drop(&mut self) {
         let active_ptr = self.active_ptr.load(Ordering::Acquire);
         let swap_ptr = self.swap_ptr.load(Ordering::Acquire);
-        // Safety: active_ptr is assumed to be protected by reverting guard.
-        // becuase, there is a risk of double-free (active_ptr = swap_ptr) if the swap was partial.
         unsafe {
             drop(Box::from_raw(swap_ptr));
             drop(Box::from_raw(active_ptr));
@@ -214,7 +218,7 @@ impl<T> Drop for SharedState<T> {
     }
 }
 
-/// Protects the shared state from being accessed, when its managing task is aborted or exited.
+/// Protects the shared state from being accessed, when its managing task is no longer running.
 struct OnExit<'a, T> {
     state: &'a SharedState<T>,
 }
@@ -244,7 +248,7 @@ impl<'a, T> Drop for OnExit<'a, T> {
     }
 }
 
-// Reverts the pointers to their original values on early return.
+/// Reverts the pointers to their original values on early return.
 struct AtomicSwapGuard<'a, T> {
     origin_active: *mut Vec<T>,
     active_ptr: &'a AtomicPtr<Vec<T>>,
@@ -312,7 +316,7 @@ where
     S: Subscriber,
     F: FileStoreFormat,
 {
-    data: Arc<SharedState<u8>>,
+    state: Arc<SharedState<u8>>,
     _s: PhantomData<S>,
     _f: PhantomData<F>,
 }
@@ -336,10 +340,11 @@ where
         interval: Duration,
         limit: u32,
     ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
+        // Stable Ptr (Box) -> Vec -> Unstable internal T_Ptr.
         let active_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
         let swap_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
 
-        let data = Arc::new(SharedState {
+        let state = Arc::new(SharedState {
             active_ptr: AtomicPtr::new(active_ptr),
             swap_ptr: AtomicPtr::new(swap_ptr),
             enabled: AtomicBool::new(true),
@@ -348,7 +353,7 @@ where
         });
 
         let instance = Self {
-            data: data.clone(),
+            state: state.clone(),
             _s: PhantomData,
             _f: PhantomData,
         };
@@ -357,7 +362,7 @@ where
         dir.push("events");
         dir.set_extension(F::extension());
 
-        Self::start_writer(dir, interval, data);
+        Self::start_writer(dir, interval, state);
 
         instance.with_filter(CallSiteFilter::new())
     }
@@ -371,6 +376,7 @@ where
         state: Arc<SharedState<F::BufferType>>,
     ) {
         tokio::spawn(async move {
+            // Stuff packed here must be `Send`, raw pointers are not members of this club.
             let _on_exit = OnExit::set(&state);
             loop {
                 tokio::select! {
@@ -384,6 +390,8 @@ where
                     _ = state.sig_write.notified() => {},
                 };
 
+                // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
+                // for whatever reason, especially that the swapping pointer is always free.
                 let prev_active = Self::protected_swap(&state);
 
                 // This buffer is now offline with the old events.
@@ -418,7 +426,7 @@ where
 
         state.active_ptr.store(origin_swap, Ordering::Release);
         state.swap_ptr.store(origin_active, Ordering::Release);
-        
+
         swap_guard.finish();
 
         origin_active
@@ -437,24 +445,26 @@ where
     // This method is called before `on_event` and doesn't disable recording permanently.
     #[inline]
     fn event_enabled(&self, _event: &Event<'_>, _ctx: Context<'_, S>) -> bool {
-        self.data.enabled.load(Ordering::Acquire)
+        self.state.enabled.load(Ordering::Acquire)
     }
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        // TODO: Recording each event with new visitor is a bottleneck.
+        // TODO: Recording here is a bottleneck, because this location is blocking with new strings used each time.
         let mut record = F::record(event);
 
-        let active_ptr = self.data.active_ptr.load(Ordering::Acquire);
+        // Only the active pointer can be used.
+        // The swapping pointer should never be accessed.
+        let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
         let buffer = unsafe { &mut *active_ptr };
 
-        // Bitwise non-overlaping copy.
+        // Bitwise non-overlapping copy.
         buffer.append(&mut record);
 
         // If writing is taking too long and blocking the observer, the same buffer will
-        // continue to be used until the sent notification is observed, even if over the limit,
-        if buffer.len() >= self.data.limit {
-            self.data.sig_write.notify();
+        // continue to be used until the sent notification is observed, even if over the limit.
+        if buffer.len() >= self.state.limit {
+            self.state.sig_write.notify();
         }
     }
 }
@@ -516,7 +526,7 @@ mod tests {
             1,
         );
 
-        let store_data = store.inner().data.clone();
+        let store_data = store.inner().state.clone();
 
         let subscriber = Registry::default().with(store);
 
@@ -565,7 +575,7 @@ mod tests {
             198,
         );
 
-        let store_data = store.inner().data.clone();
+        let store_data = store.inner().state.clone();
         let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
         let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
@@ -656,7 +666,7 @@ mod tests {
             346,
         );
 
-        let store_data = store.inner().data.clone();
+        let store_data = store.inner().state.clone();
         let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
         let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
