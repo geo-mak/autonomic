@@ -1,7 +1,9 @@
 use std::pin::Pin;
-use std::sync::atomic::Ordering::{Acquire, Release};
+use std::sync::atomic::Ordering::{self, Acquire, Release};
 use std::sync::{Mutex, atomic::AtomicBool};
 use std::task::{Context, Poll, Waker};
+
+use futures::task::AtomicWaker;
 
 // Notification signal for single waiter.
 // Only the last waiter is notified.
@@ -49,6 +51,54 @@ impl Future for Notification<'_> {
         } else {
             let mut waker_lock = self.notify.waker.lock().unwrap();
             *waker_lock = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+pub struct Switch {
+    state: AtomicBool,
+    waker: AtomicWaker,
+}
+
+impl Switch {
+    #[inline]
+    pub const fn new(on: bool) -> Self {
+        Self {
+            state: AtomicBool::new(on),
+            waker: AtomicWaker::new(),
+        }
+    }
+
+    #[inline]
+    pub fn set(&self, new: bool) {
+        self.state.store(new, Ordering::Release);
+        self.waker.wake();
+    }
+
+    #[inline]
+    pub fn get(&self) -> bool {
+        self.state.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub const fn on(&self) -> On<'_> {
+        On { switch: self }
+    }
+}
+
+pub struct On<'a> {
+    switch: &'a Switch,
+}
+
+impl Future for On<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.switch.waker.register(cx.waker());
+        if self.switch.state.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
             Poll::Pending
         }
     }

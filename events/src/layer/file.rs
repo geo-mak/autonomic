@@ -16,7 +16,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
-use autonomic_core::sync::Signal;
+use autonomic_core::sync::{Signal, Switch};
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
@@ -194,17 +194,18 @@ impl FileExtension for JSONFormat {
 /// # Safety
 ///
 /// - The atomic pointers maintain stability with safe dereferencing at any point of time,
-///   but the inner pointers of the buffers are unstable and unsafe to access any point of time,
+///   but the inner pointers of the buffers are unstable and unsafe to access at any point of time,
 ///   because their location will be mutated if the buffers are forced to adjust their capacity.
 ///
-/// - The `Drop` implementation always assume successful swapping, where the atomic pointers are not
+/// - The `Drop` implementation always assumes successful swapping, where the atomic pointers are not
 ///   identical when drop could be called.
 struct SharedState<T> {
     active_ptr: AtomicPtr<Vec<T>>,
     swap_ptr: AtomicPtr<Vec<T>>,
-    enabled: AtomicBool,
     sig_write: Signal,
     limit: usize,
+    enabled: AtomicBool,
+    free: Switch,
 }
 
 impl<T> Drop for SharedState<T> {
@@ -347,9 +348,10 @@ where
         let state = Arc::new(SharedState {
             active_ptr: AtomicPtr::new(active_ptr),
             swap_ptr: AtomicPtr::new(swap_ptr),
-            enabled: AtomicBool::new(true),
             sig_write: Signal::new(),
             limit: limit as usize,
+            enabled: AtomicBool::new(true),
+            free: Switch::new(true),
         });
 
         let instance = Self {
@@ -393,11 +395,16 @@ where
                 // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
                 // for whatever reason, especially that the swapping pointer is always free.
                 let prev_active = Self::protected_swap(&state);
+                let prev_buffer = unsafe { &mut *prev_active };
 
-                // This buffer is now offline with the old events.
-                let buffer = unsafe { &mut *prev_active };
+                // Makes sure no active appending is being done,
+                // to guarantee that the swapped buffer is not being aliased anymore.
+                state.free.on().await;
 
-                if let Err(e) = F::write(buffer, &directory).await {
+                // At this point:
+                // - Buffers are fully swapped, and the other buffer will be used for new recordings.
+                // - No active aliasing for the swapped buffer.
+                if let Err(e) = F::write(prev_buffer, &directory).await {
                     // Recording will be disabled by "OnExit" guard when dropped.
                     trace_error!(
                         source = "EventsFileStore",
@@ -407,7 +414,7 @@ where
                 }
 
                 // Clear the flushed buffer.
-                buffer.clear();
+                prev_buffer.clear();
             }
         });
     }
@@ -456,10 +463,16 @@ where
         // Only the active pointer can be used.
         // The swapping pointer should never be accessed.
         let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
+
+        // Prevents writing until the current appending is finished.
+        self.state.free.set(false);
+
         let buffer = unsafe { &mut *active_ptr };
 
         // Bitwise non-overlapping copy.
         buffer.append(&mut record);
+
+        self.state.free.set(true);
 
         // If writing is taking too long and blocking the observer, the same buffer will
         // continue to be used until the sent notification is observed, even if over the limit.

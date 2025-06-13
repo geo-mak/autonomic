@@ -31,6 +31,7 @@ lazy_static = "1.5.0"
 tokio = { version = "1.39.3", features = ["rt-multi-thread", "macros"]}
 tokio-stream = { version = "0.1", features = ["sync"]}
 futures-util = { version =  "0.3.30"}
+futures = { version = "0.3.31"}
 
 serde = { version = "1.0.209", features = ["derive", "rc"]}
 serde_json = "1.0.127"
