@@ -3,6 +3,8 @@ name = "autonomic_core"
 version = "0.1.0"
 edition = "2024"
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["time"] }
 
 [dependencies]
 futures.workspace = true

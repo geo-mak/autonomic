@@ -125,3 +125,71 @@ impl Future for Off<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_signal_notifies_waiter() {
+        use std::sync::Arc;
+
+        let signal = Arc::new(Signal::new());
+        let waiter = signal.clone();
+
+        let wait_task = tokio::spawn(async move {
+            waiter.notified().await;
+        });
+
+        tokio::task::yield_now().await;
+
+        signal.notify();
+
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), wait_task).await;
+        assert!(result.is_ok(), "Signal did not notify in time");
+    }
+
+    #[tokio::test]
+    async fn test_switch_on() {
+        let switch = Arc::new(Switch::new(false));
+        let s = switch.clone();
+
+        let on_future = async move {
+            s.on().await;
+            assert!(s.get());
+        };
+
+        let task = tokio::spawn(on_future);
+
+        tokio::task::yield_now().await;
+
+        switch.set(true);
+
+        // Task should complete once switch is set to true
+        let result = timeout(Duration::from_millis(100), task).await;
+        assert!(result.is_ok(), "on() future did not resolve in time");
+    }
+
+    #[tokio::test]
+    async fn test_switch_off() {
+        let switch = Arc::new(Switch::new(true));
+        let s = switch.clone();
+
+        let off_future = async move {
+            s.off().await;
+            assert!(!s.get());
+        };
+
+        let test_task = tokio::spawn(off_future);
+
+        tokio::task::yield_now().await;
+
+        switch.set(false);
+
+        let result = timeout(Duration::from_millis(100), test_task).await;
+        assert!(result.is_ok(), "off() future did not resolve in time");
+    }
+}
