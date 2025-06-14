@@ -378,32 +378,29 @@ where
         state: Arc<SharedState<F::BufferType>>,
     ) {
         tokio::spawn(async move {
-            // Stuff packed here must be `Send`, raw pointers are not members of this club.
             let _on_exit = OnExit::set(&state);
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(interval) => {
-                        let active_ptr = state.active_ptr.load(Ordering::Acquire);
-                        if unsafe { &mut *active_ptr }.is_empty() {
-                            // Don't leave the thread.
-                            continue;
-                        }
-                    },
+                    _ = tokio::time::sleep(interval) => {},
                     _ = state.sig_write.notified() => {},
                 };
+
+                let active_ptr = state.active_ptr.load(Ordering::Acquire);
+                if unsafe { &mut *active_ptr }.is_empty() {
+                    continue;
+                }
 
                 // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
                 // for whatever reason, especially that the swapping pointer is always free.
                 let prev_active = Self::protected_swap(&state);
                 let prev_buffer = unsafe { &mut *prev_active };
 
-                // Makes sure no active appending is being done,
-                // to guarantee that the swapped buffer is not being aliased anymore.
+                // Waits until being notified that current active appending has completed.
                 state.free.on().await;
 
                 // At this point:
                 // - Buffers are fully swapped, and the other buffer will be used for new recordings.
-                // - No active aliasing for the swapped buffer.
+                // - No active mutable aliasing for the swapped buffer.
                 if let Err(e) = F::write(prev_buffer, &directory).await {
                     // Recording will be disabled by "OnExit" guard when dropped.
                     trace_error!(
@@ -464,7 +461,7 @@ where
         // The swapping pointer should never be accessed.
         let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
 
-        // Prevents writing until the current appending is finished.
+        // Prevents writing until the current mutable aliasing session is finished.
         self.state.free.set(false);
 
         let buffer = unsafe { &mut *active_ptr };
@@ -472,13 +469,11 @@ where
         // Bitwise non-overlapping copy.
         buffer.append(&mut record);
 
-        self.state.free.set(true);
-
-        // If writing is taking too long and blocking the observer, the same buffer will
-        // continue to be used until the sent notification is observed, even if over the limit.
         if buffer.len() >= self.state.limit {
             self.state.sig_write.notify();
         }
+
+        self.state.free.set(true);
     }
 }
 
