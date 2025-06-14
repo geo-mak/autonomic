@@ -57,7 +57,7 @@ impl Future for Notification<'_> {
 }
 
 pub struct Switch {
-    state: AtomicBool,
+    on: AtomicBool,
     waker: AtomicWaker,
 }
 
@@ -65,25 +65,30 @@ impl Switch {
     #[inline]
     pub const fn new(on: bool) -> Self {
         Self {
-            state: AtomicBool::new(on),
+            on: AtomicBool::new(on),
             waker: AtomicWaker::new(),
         }
     }
 
     #[inline]
-    pub fn set(&self, new: bool) {
-        self.state.store(new, Ordering::Release);
+    pub fn set(&self, on: bool) {
+        self.on.store(on, Ordering::Release);
         self.waker.wake();
     }
 
     #[inline]
     pub fn get(&self) -> bool {
-        self.state.load(Ordering::Acquire)
+        self.on.load(Ordering::Acquire)
     }
 
     #[inline(always)]
     pub const fn on(&self) -> On<'_> {
         On { switch: self }
+    }
+
+    #[inline(always)]
+    pub const fn off(&self) -> Off<'_> {
+        Off { switch: self }
     }
 }
 
@@ -96,7 +101,24 @@ impl Future for On<'_> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         self.switch.waker.register(cx.waker());
-        if self.switch.state.load(Ordering::Acquire) {
+        if self.switch.on.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+pub struct Off<'a> {
+    switch: &'a Switch,
+}
+
+impl Future for Off<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        self.switch.waker.register(cx.waker());
+        if !self.switch.on.load(Ordering::Acquire) {
             Poll::Ready(())
         } else {
             Poll::Pending
