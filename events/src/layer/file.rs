@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -16,7 +16,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
-use autonomic_core::sync::{Signal, Switch};
+use autonomic_core::sync::Signal;
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
@@ -205,7 +205,7 @@ struct SharedState<T> {
     sig_write: Signal,
     limit: usize,
     enabled: AtomicBool,
-    free: Switch,
+    access: Mutex<()>,
 }
 
 impl<T> Drop for SharedState<T> {
@@ -351,7 +351,7 @@ where
             sig_write: Signal::new(),
             limit: limit as usize,
             enabled: AtomicBool::new(true),
-            free: Switch::new(true),
+            access: Mutex::new(()),
         });
 
         let instance = Self {
@@ -369,7 +369,7 @@ where
         instance.with_filter(CallSiteFilter::new())
     }
 
-    // TODO: Graceful shoutdown is not implemented.
+    // TODO: Graceful shutdown is not implemented.
     // The current implementation assumes the exit to be either forced abort because of panic,
     // or write error incidences.
     fn start_writer(
@@ -390,17 +390,12 @@ where
                     continue;
                 }
 
-                // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
-                // for whatever reason, especially that the swapping pointer is always free.
+                // If poisoned the task will panic and "OnExit" will run.
                 let prev_active = Self::protected_swap(&state);
                 let prev_buffer = unsafe { &mut *prev_active };
 
-                // Waits until being notified that current active appending has completed.
-                state.free.on().await;
-
-                // At this point:
-                // - Buffers are fully swapped, and the other buffer will be used for new recordings.
-                // - No active mutable aliasing for the swapped buffer.
+                // Pointers have been swapped successfully, and during this time, access to them was blocked,
+                // so newer loads are guaranteed to access the other buffer.
                 if let Err(e) = F::write(prev_buffer, &directory).await {
                     // Recording will be disabled by "OnExit" guard when dropped.
                     trace_error!(
@@ -418,9 +413,13 @@ where
 
     #[inline]
     fn protected_swap(state: &SharedState<F::BufferType>) -> *mut Vec<F::BufferType> {
+        let _access_guard = state.access.lock().unwrap();
+
         let origin_active = state.active_ptr.load(Ordering::Acquire);
         let origin_swap = state.swap_ptr.load(Ordering::Acquire);
 
+        // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
+        // for whatever reason, especially that the swapping pointer is always free.
         let swap_guard = AtomicSwapGuard::set(
             origin_active,
             &state.active_ptr,
@@ -432,6 +431,8 @@ where
         state.swap_ptr.store(origin_active, Ordering::Release);
 
         swap_guard.finish();
+
+        drop(_access_guard);
 
         origin_active
     }
@@ -457,23 +458,21 @@ where
         // TODO: Recording here is a bottleneck, because this location is blocking with new strings used each time.
         let mut record = F::record(event);
 
-        // Only the active pointer can be used.
-        // The swapping pointer should never be accessed.
-        let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
+        // The guard will be acquired only when pointer are swapped,
+        // until the current aliasing session has finished.
+        if let Ok(_access_guard) = self.state.access.lock() {
+            // Only the active pointer can be used.
+            // The swapping pointer should never be accessed.
+            let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
+            let buffer = unsafe { &mut *active_ptr };
 
-        // Prevents writing until the current mutable aliasing session is finished.
-        self.state.free.set(false);
+            // Bitwise non-overlapping copy.
+            buffer.append(&mut record);
 
-        let buffer = unsafe { &mut *active_ptr };
-
-        // Bitwise non-overlapping copy.
-        buffer.append(&mut record);
-
-        if buffer.len() >= self.state.limit {
-            self.state.sig_write.notify();
+            if buffer.len() >= self.state.limit {
+                self.state.sig_write.notify();
+            }
         }
-
-        self.state.free.set(true);
     }
 }
 
