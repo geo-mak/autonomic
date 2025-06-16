@@ -381,12 +381,15 @@ where
         state: Arc<SharedState<F::BufferType>>,
     ) {
         tokio::spawn(async move {
+            // drop will be called on `Arc<SharedState>` after `OnExit` is dropped,
+            // so the referenced state should remain valid and safe to access until `OnExit` finishes.
             let _on_exit = OnExit::set(&state);
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {},
                     _ = state.sig_write.notified() => {},
                 };
+
                 if let Some(prev_buffer) = Self::protected_swap(&state) {
                     // Pointers have been swapped successfully, and during this time, access to them was blocked,
                     // so newer loads are guaranteed to access the other buffer.
