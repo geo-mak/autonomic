@@ -385,37 +385,38 @@ where
                     _ = state.sig_write.notified() => {},
                 };
 
-                let active_ptr = state.active_ptr.load(Ordering::Acquire);
-                if unsafe { &mut *active_ptr }.is_empty() {
-                    continue;
-                }
-
                 // If poisoned the task will panic and "OnExit" will run.
-                let prev_active = Self::protected_swap(&state);
-                let prev_buffer = unsafe { &mut *prev_active };
+                if let Some(prev_active) = Self::protected_swap(&state) {
+                    let prev_buffer = unsafe { &mut *prev_active };
 
-                // Pointers have been swapped successfully, and during this time, access to them was blocked,
-                // so newer loads are guaranteed to access the other buffer.
-                if let Err(e) = F::write(prev_buffer, &directory).await {
-                    // Recording will be disabled by "OnExit" guard when dropped.
-                    trace_error!(
-                        source = "EventsFileStore",
-                        message = format!("Stopped: {}", e)
-                    );
-                    return;
+                    // Pointers have been swapped successfully, and during this time, access to them was blocked,
+                    // so newer loads are guaranteed to access the other buffer.
+                    if let Err(e) = F::write(prev_buffer, &directory).await {
+                        // Recording will be disabled by "OnExit" guard when dropped.
+                        trace_error!(
+                            source = "EventsFileStore",
+                            message = format!("Stopped: {}", e)
+                        );
+                        return;
+                    }
+
+                    // Clear the flushed buffer.
+                    prev_buffer.clear();
                 }
-
-                // Clear the flushed buffer.
-                prev_buffer.clear();
             }
         });
     }
 
     #[inline]
-    fn protected_swap(state: &SharedState<F::BufferType>) -> *mut Vec<F::BufferType> {
+    fn protected_swap(state: &SharedState<F::BufferType>) -> Option<*mut Vec<F::BufferType>> {
         let _access_guard = state.access.lock().unwrap();
 
         let origin_active = state.active_ptr.load(Ordering::Acquire);
+
+        if unsafe { &mut *origin_active }.is_empty() {
+            return None;
+        }
+
         let origin_swap = state.swap_ptr.load(Ordering::Acquire);
 
         // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
@@ -434,7 +435,7 @@ where
 
         drop(_access_guard);
 
-        origin_active
+        Some(origin_active)
     }
 }
 
