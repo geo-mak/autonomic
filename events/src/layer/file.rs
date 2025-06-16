@@ -200,7 +200,7 @@ impl FileExtension for JSONFormat {
 /// - The `Drop` implementation always assumes successful swapping, where the atomic pointers are not
 ///   identical when drop could be called.
 struct SharedState<T> {
-    active_ptr: AtomicPtr<Vec<T>>,
+    current_ptr: AtomicPtr<Vec<T>>,
     swap_ptr: AtomicPtr<Vec<T>>,
     sig_write: Signal,
     limit: usize,
@@ -210,11 +210,11 @@ struct SharedState<T> {
 
 impl<T> Drop for SharedState<T> {
     fn drop(&mut self) {
-        let active_ptr = self.active_ptr.load(Ordering::Acquire);
+        let current_ptr = self.current_ptr.load(Ordering::Acquire);
         let swap_ptr = self.swap_ptr.load(Ordering::Acquire);
         unsafe {
+            drop(Box::from_raw(current_ptr));
             drop(Box::from_raw(swap_ptr));
-            drop(Box::from_raw(active_ptr));
         }
     }
 }
@@ -233,26 +233,28 @@ impl<'a, T> OnExit<'a, T> {
 
 impl<'a, T> Drop for OnExit<'a, T> {
     fn drop(&mut self) {
-        // Set to disabled to prevent recording.
+        // Set to disabled to prevent new recording.
         self.state.enabled.store(false, Ordering::Release);
+        // Acquire new lock to access the buffers when they are not being aliased currently.
+        if let Ok(_access_guard) = self.state.access.lock() {
+            // Some garbage collection (currently).
+            let current_ptr = self.state.current_ptr.load(Ordering::Acquire);
+            let current_buf = unsafe { &mut *current_ptr };
+            current_buf.clear();
+            current_buf.shrink_to_fit();
 
-        // Some garbage collection (currently).
-        let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
-        let active_buf = unsafe { &mut *active_ptr };
-        active_buf.clear();
-        active_buf.shrink_to_fit();
-
-        let swap_ptr = self.state.swap_ptr.load(Ordering::Acquire);
-        let swap_buf = unsafe { &mut *swap_ptr };
-        swap_buf.clear();
-        swap_buf.shrink_to_fit();
+            let swap_ptr = self.state.swap_ptr.load(Ordering::Acquire);
+            let swap_buf = unsafe { &mut *swap_ptr };
+            swap_buf.clear();
+            swap_buf.shrink_to_fit();
+        }
     }
 }
 
 /// Reverts the pointers to their original values on early return.
 struct AtomicSwapGuard<'a, T> {
-    origin_active: *mut Vec<T>,
-    active_ptr: &'a AtomicPtr<Vec<T>>,
+    origin_current: *mut Vec<T>,
+    current_ptr: &'a AtomicPtr<Vec<T>>,
     origin_swap: *mut Vec<T>,
     swap_ptr: &'a AtomicPtr<Vec<T>>,
 }
@@ -266,8 +268,8 @@ impl<'a, T> AtomicSwapGuard<'a, T> {
         swap_ptr: &'a AtomicPtr<Vec<T>>,
     ) -> Self {
         Self {
-            origin_active,
-            active_ptr,
+            origin_current: origin_active,
+            current_ptr: active_ptr,
             origin_swap,
             swap_ptr,
         }
@@ -281,7 +283,8 @@ impl<'a, T> AtomicSwapGuard<'a, T> {
 
 impl<'a, T> Drop for AtomicSwapGuard<'a, T> {
     fn drop(&mut self) {
-        self.active_ptr.store(self.origin_active, Ordering::Release);
+        self.current_ptr
+            .store(self.origin_current, Ordering::Release);
         self.swap_ptr.store(self.origin_swap, Ordering::Release);
     }
 }
@@ -342,11 +345,11 @@ where
         limit: u32,
     ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
         // Stable Ptr (Box) -> Vec -> Unstable internal T_Ptr.
-        let active_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
+        let current_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
         let swap_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
 
         let state = Arc::new(SharedState {
-            active_ptr: AtomicPtr::new(active_ptr),
+            current_ptr: AtomicPtr::new(current_ptr),
             swap_ptr: AtomicPtr::new(swap_ptr),
             sig_write: Signal::new(),
             limit: limit as usize,
@@ -384,11 +387,7 @@ where
                     _ = tokio::time::sleep(interval) => {},
                     _ = state.sig_write.notified() => {},
                 };
-
-                // If poisoned the task will panic and "OnExit" will run.
-                if let Some(prev_active) = Self::protected_swap(&state) {
-                    let prev_buffer = unsafe { &mut *prev_active };
-
+                if let Some(prev_buffer) = Self::protected_swap(&state) {
                     // Pointers have been swapped successfully, and during this time, access to them was blocked,
                     // so newer loads are guaranteed to access the other buffer.
                     if let Err(e) = F::write(prev_buffer, &directory).await {
@@ -408,12 +407,15 @@ where
     }
 
     #[inline]
-    fn protected_swap(state: &SharedState<F::BufferType>) -> Option<*mut Vec<F::BufferType>> {
+    fn protected_swap(state: &SharedState<F::BufferType>) -> Option<&mut Vec<F::BufferType>> {
+        // If poisoned the task will panic and "OnExit" will run.
         let _access_guard = state.access.lock().unwrap();
 
-        let origin_active = state.active_ptr.load(Ordering::Acquire);
+        let origin_active = state.current_ptr.load(Ordering::Acquire);
 
-        if unsafe { &mut *origin_active }.is_empty() {
+        let current_buffer = unsafe { &mut *origin_active };
+
+        if current_buffer.is_empty() {
             return None;
         }
 
@@ -423,19 +425,19 @@ where
         // for whatever reason, especially that the swapping pointer is always free.
         let swap_guard = AtomicSwapGuard::set(
             origin_active,
-            &state.active_ptr,
+            &state.current_ptr,
             origin_swap,
             &state.swap_ptr,
         );
 
-        state.active_ptr.store(origin_swap, Ordering::Release);
+        state.current_ptr.store(origin_swap, Ordering::Release);
         state.swap_ptr.store(origin_active, Ordering::Release);
 
         swap_guard.finish();
 
         drop(_access_guard);
 
-        Some(origin_active)
+        Some(current_buffer)
     }
 }
 
@@ -462,10 +464,10 @@ where
         // The guard will be acquired only when pointer are swapped,
         // until the current aliasing session has finished.
         if let Ok(_access_guard) = self.state.access.lock() {
-            // Only the active pointer can be used.
+            // Only the current pointer can be used.
             // The swapping pointer should never be accessed.
-            let active_ptr = self.state.active_ptr.load(Ordering::Acquire);
-            let buffer = unsafe { &mut *active_ptr };
+            let current_ptr = self.state.current_ptr.load(Ordering::Acquire);
+            let buffer = unsafe { &mut *current_ptr };
 
             // Bitwise non-overlapping copy.
             buffer.append(&mut record);
@@ -555,7 +557,7 @@ mod tests {
         assert!(unsafe { &*writing_ptr }.is_empty());
         assert_eq!(unsafe { &*writing_ptr }.capacity(), 0);
 
-        let recording_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let recording_ptr = store_data.current_ptr.load(Ordering::Acquire);
 
         // Try to propagate another event.
         trace_info!(source = "event 3", message = "info message");
@@ -584,7 +586,7 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
-        let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let init_active_ptr = store_data.current_ptr.load(Ordering::Acquire);
         let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
@@ -656,7 +658,7 @@ mod tests {
         assert!(unsafe { &*swap_ptr }.is_empty());
         assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
 
-        let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let active_ptr = store_data.current_ptr.load(Ordering::Acquire);
         assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
         assert!(unsafe { &*active_ptr }.is_empty());
         assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
@@ -675,7 +677,7 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
-        let init_active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let init_active_ptr = store_data.current_ptr.load(Ordering::Acquire);
         let init_swap_ptr = store_data.swap_ptr.load(Ordering::Acquire);
 
         let subscriber = Registry::default().with(store);
@@ -757,7 +759,7 @@ mod tests {
         assert!(unsafe { &*swap_ptr }.is_empty());
         assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
 
-        let active_ptr = store_data.active_ptr.load(Ordering::Acquire);
+        let active_ptr = store_data.current_ptr.load(Ordering::Acquire);
         assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
         assert!(unsafe { &*active_ptr }.is_empty());
         assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
