@@ -19,8 +19,8 @@ layers to decentralized embedded control elements.
 
 > Note:
 > - No stable data model. It is subject to major changes without prior notice. 
+> - May periodically have compromised and/or incomplete implementations that are not safe to use except in test environments.
 > - Many components are not public yet or partially public.
-> - The current implementation "tactically" uses a set of dependencies as scaffolding, but ultimately many of these will be replaced by custom solutions and internal protocols to minimize indirections and reduce the levels of abstraction that naturally reduce runtime efficiency.
 
 ### Implementation Highlights:
 Autonomic consists of multiple components that can be used to build unified control planes.
