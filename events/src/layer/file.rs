@@ -431,8 +431,6 @@ where
 
         let origin_swap = buffer_guard.swap_ptr.load(Ordering::Acquire);
 
-        // Mostly for the peace of mind. It is extremely unlikely that it could be interrupted
-        // for whatever reason, especially that the swapping pointer is always free.
         let swap_guard = AtomicSwapGuard::set(
             origin_current,
             &buffer_guard.current_ptr,

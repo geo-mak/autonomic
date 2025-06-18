@@ -5,6 +5,3 @@ edition = "2024"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["time"] }
-
-[dependencies]
-futures.workspace = true
