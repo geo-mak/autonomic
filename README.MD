@@ -21,22 +21,3 @@ layers to decentralized embedded control elements.
 > - No stable data model. It is subject to major changes without prior notice. 
 > - May periodically have compromised and/or incomplete implementations that are not safe to use except in test environments.
 > - Many components are not public yet or partially public.
-
-### Implementation Highlights:
-Autonomic consists of multiple components that can be used to build unified control planes.
-
-The related components are organized into logical packages, each grouping together functionality that serves a specific purpose 
-within the control plane.
-
-The system exposes a public control API defined by traits for interacting with its components, leaving the implementation 
-details of it to the concrete implementations of API services.
-
-Components have their own internal model of compositionality. Many components may run as separate processes, communicating via an internal IPC protocol. This internal model is not part of the public API, so changes to it do not affect external systems or 
-consumers of the public interfaces.
-
-Meanwhile, I have implemented an OpenAPI service with router, server with TLS support and client components, which was originally intended for testing since it is the easiest to change.
-The gRPC service implementation is considered, but it is not a priority.
-
-Areas of further work:
-* Evolving the core design and the compositionality model.
-* CLI and management tools for the client.
