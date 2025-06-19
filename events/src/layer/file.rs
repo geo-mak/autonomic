@@ -1,7 +1,6 @@
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -189,32 +188,60 @@ impl FileExtension for JSONFormat {
     }
 }
 
-struct SwapBuffer<T> {
-    current_ptr: AtomicPtr<Vec<T>>,
-    swap_ptr: AtomicPtr<Vec<T>>,
+pub struct SwapBuffer<T> {
+    buffers: [Box<Vec<T>>; 2],
+    current: usize,
 }
 
-impl<T> Drop for SwapBuffer<T> {
-    fn drop(&mut self) {
-        let current_ptr = self.current_ptr.load(Ordering::Acquire);
-        let swap_ptr = self.swap_ptr.load(Ordering::Acquire);
-        unsafe {
-            drop(Box::from_raw(current_ptr));
-            drop(Box::from_raw(swap_ptr));
+impl<T> SwapBuffer<T> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffers: [
+                Box::new(Vec::with_capacity(capacity)),
+                Box::new(Vec::with_capacity(capacity)),
+            ],
+            current: 0,
         }
+    }
+
+    /// Doesn't load nur store, only changes the access flag of the current buffer.
+    #[inline(always)]
+    pub const fn swap(&mut self) {
+        self.current ^= 1;
+    }
+
+    #[inline(always)]
+    pub const fn current(&self) -> &Vec<T> {
+        &self.buffers[self.current]
+    }
+
+    #[inline(always)]
+    pub const fn current_mut(&mut self) -> &mut Vec<T> {
+        &mut self.buffers[self.current]
+    }
+
+    #[inline]
+    pub const fn inactive(&self) -> &Vec<T> {
+        &self.buffers[self.inactive_index()]
+    }
+
+    #[inline]
+    pub const fn inactive_mut(&mut self) -> &mut Vec<T> {
+        &mut self.buffers[self.inactive_index()]
+    }
+
+    #[inline]
+    pub const fn current_index(&self) -> usize {
+        self.current
+    }
+
+    #[inline]
+    pub const fn inactive_index(&self) -> usize {
+        self.current ^ 1
     }
 }
 
 /// The shared data of the file store.
-///
-/// # Safety
-///
-/// - The atomic pointers maintain stability with safe dereferencing at any point of time,
-///   but the inner pointers of the buffers are unstable and unsafe to access at any point of time,
-///   because their location will be mutated if the buffers are forced to adjust their capacity.
-///
-/// - The `Drop` implementation always assumes successful swapping, where the atomic pointers are not
-///   identical when drop could be called.
 struct SharedState<T> {
     buffer: Mutex<SwapBuffer<T>>,
     limit: usize,
@@ -224,72 +251,32 @@ struct SharedState<T> {
 
 /// Executes memory protection logic, when the writing task is no longer running.
 struct OnExit<'a, T> {
-    state: &'a SharedState<T>,
+    buffer: &'a SharedState<T>,
 }
 
 impl<'a, T> OnExit<'a, T> {
     #[inline(always)]
     const fn set(state: &'a SharedState<T>) -> Self {
-        Self { state }
+        Self { buffer: state }
     }
 }
 
 impl<'a, T> Drop for OnExit<'a, T> {
     fn drop(&mut self) {
         // Set to disabled to prevent new recording.
-        self.state.enabled.store(false, Ordering::Release);
+        self.buffer.enabled.store(false, Ordering::Release);
 
         // If poisoned, the data behind the guard must be assumed to be invalid.
-        if let Ok(buffer_guard) = self.state.buffer.lock() {
+        if let Ok(mut buffer_guard) = self.buffer.buffer.lock() {
             // Some garbage collection (currently).
-            let current_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-            let current_buf = unsafe { &mut *current_ptr };
-            current_buf.clear();
-            current_buf.shrink_to_fit();
+            let current = buffer_guard.current_mut();
+            current.clear();
+            current.shrink_to_fit();
 
-            let swap_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-            let swap_buf = unsafe { &mut *swap_ptr };
-            swap_buf.clear();
-            swap_buf.shrink_to_fit();
+            let swap = buffer_guard.inactive_mut();
+            swap.clear();
+            swap.shrink_to_fit();
         }
-    }
-}
-
-/// Reverts the pointers to their original values on early return.
-struct AtomicSwapGuard<'a, T> {
-    origin_current: *mut Vec<T>,
-    current_ptr: &'a AtomicPtr<Vec<T>>,
-    origin_swap: *mut Vec<T>,
-    swap_ptr: &'a AtomicPtr<Vec<T>>,
-}
-
-impl<'a, T> AtomicSwapGuard<'a, T> {
-    #[inline(always)]
-    const fn set(
-        origin_active: *mut Vec<T>,
-        active_ptr: &'a AtomicPtr<Vec<T>>,
-        origin_swap: *mut Vec<T>,
-        swap_ptr: &'a AtomicPtr<Vec<T>>,
-    ) -> Self {
-        Self {
-            origin_current: origin_active,
-            current_ptr: active_ptr,
-            origin_swap,
-            swap_ptr,
-        }
-    }
-
-    #[inline(always)]
-    const fn finish(self) {
-        let _ = ManuallyDrop::new(self);
-    }
-}
-
-impl<'a, T> Drop for AtomicSwapGuard<'a, T> {
-    fn drop(&mut self) {
-        self.current_ptr
-            .store(self.origin_current, Ordering::Release);
-        self.swap_ptr.store(self.origin_swap, Ordering::Release);
     }
 }
 
@@ -348,14 +335,7 @@ where
         interval: Duration,
         limit: u32,
     ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
-        // Stable Ptr (Box) -> Vec -> Unstable internal T_Ptr.
-        let current_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
-        let swap_ptr = Box::into_raw(Box::new(Vec::with_capacity(limit as usize)));
-
-        let buffer = Mutex::new(SwapBuffer {
-            current_ptr: AtomicPtr::new(current_ptr),
-            swap_ptr: AtomicPtr::new(swap_ptr),
-        });
+        let buffer = Mutex::new(SwapBuffer::new(limit as usize));
 
         let state = Arc::new(SharedState {
             buffer,
@@ -388,8 +368,7 @@ where
         state: Arc<SharedState<F::BufferType>>,
     ) {
         tokio::spawn(async move {
-            // drop will be called on `Arc<SharedState>` after `OnExit` is dropped,
-            // so the referenced state should remain valid and safe to access until `OnExit` finishes.
+            // The referenced state should remain valid and safe to access until `OnExit` finishes.
             let _on_exit = OnExit::set(&state);
             loop {
                 tokio::select! {
@@ -397,55 +376,34 @@ where
                     _ = state.sig_write.notified() => {},
                 };
 
-                if let Some(prev_buffer) = Self::protected_swap(&state) {
-                    // Pointers have been swapped successfully, and during this time, access to them was blocked,
-                    // so newer loads are guaranteed to access the other buffer.
-                    if let Err(e) = F::write(prev_buffer, &directory).await {
-                        // Recording will be disabled by "OnExit" guard when dropped.
-                        trace_error!(
-                            source = "EventsFileStore",
-                            message = format!("Stopped: {}", e)
-                        );
-                        return;
+                let inactive_buffer: &mut Vec<_> = {
+                    // If poisoned the task will panic and "OnExit" will run.
+                    let mut buffer_guard = state.buffer.lock().unwrap();
+
+                    let current_ptr = buffer_guard.current_mut() as *mut Vec<F::BufferType>;
+                    let current_buffer = unsafe { &mut *current_ptr };
+
+                    if current_buffer.is_empty() {
+                        continue;
                     }
 
-                    // Clear the flushed buffer.
-                    prev_buffer.clear();
+                    buffer_guard.swap();
+
+                    // This is now inactive.
+                    current_buffer
+                };
+
+                if let Err(e) = F::write(inactive_buffer, &directory).await {
+                    trace_error!(
+                        source = "EventsFileStore",
+                        message = format!("Stopped: {}", e)
+                    );
+                    return;
                 }
+
+                inactive_buffer.clear();
             }
         });
-    }
-
-    #[inline]
-    fn protected_swap(state: &SharedState<F::BufferType>) -> Option<&mut Vec<F::BufferType>> {
-        // If poisoned the task will panic and "OnExit" will run.
-        let buffer_guard = state.buffer.lock().unwrap();
-
-        let origin_current = buffer_guard.current_ptr.load(Ordering::Acquire);
-
-        let current_buffer = unsafe { &mut *origin_current };
-
-        if current_buffer.is_empty() {
-            return None;
-        }
-
-        let origin_swap = buffer_guard.swap_ptr.load(Ordering::Acquire);
-
-        let swap_guard = AtomicSwapGuard::set(
-            origin_current,
-            &buffer_guard.current_ptr,
-            origin_swap,
-            &buffer_guard.swap_ptr,
-        );
-
-        swap_guard.current_ptr.store(origin_swap, Ordering::Release);
-        swap_guard.swap_ptr.store(origin_current, Ordering::Release);
-
-        swap_guard.finish();
-
-        drop(buffer_guard);
-
-        Some(current_buffer)
     }
 }
 
@@ -466,13 +424,10 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        // TODO: Recording here is a bottleneck, because this location is blocking with new strings used each time.
         let mut record = F::record(event);
 
-        if let Ok(buffer_guard) = self.state.buffer.lock() {
-            // Only the current pointer can be used, the swap pointer must never be accessed.
-            let current_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-            let buffer = unsafe { &mut *current_ptr };
+        if let Ok(mut buffer_guard) = self.state.buffer.lock() {
+            let buffer = buffer_guard.current_mut();
 
             // Bitwise non-overlapping copy.
             buffer.append(&mut record);
@@ -557,10 +512,9 @@ mod tests {
         assert!(!store_data.enabled.load(Ordering::Acquire));
 
         let buffer_guard = store_data.buffer.lock().unwrap();
-        // Before calling write, pointers were swapped.
-        let writing_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-        assert!(unsafe { &*writing_ptr }.is_empty());
-        assert_eq!(unsafe { &*writing_ptr }.capacity(), 0);
+        let writing_buf = buffer_guard.inactive();
+        assert!(writing_buf.is_empty());
+        assert_eq!(writing_buf.capacity(), 0);
         drop(buffer_guard); // <- will block recording if not dropped.
 
         // Try to propagate another event.
@@ -569,11 +523,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         let buffer_guard = store_data.buffer.lock().unwrap();
-        let recording_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
+        let recording_buf = buffer_guard.current();
 
         // No recording should have been done.
-        assert!(unsafe { &*recording_ptr }.is_empty());
-        assert_eq!(unsafe { &*recording_ptr }.capacity(), 0);
+        assert!(recording_buf.is_empty());
+        assert_eq!(recording_buf.capacity(), 0);
     }
 
     #[tokio::test]
@@ -595,11 +549,6 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
-
-        let buffer_guard = store_data.buffer.lock().unwrap();
-        let init_active_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-        let init_swap_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-        drop(buffer_guard); // <- will block the test if not dropped.
 
         let subscriber = Registry::default().with(store);
 
@@ -667,15 +616,13 @@ mod tests {
 
         // Both should be empty now, because the active written has been flushed,
         // and swap is not yet used, but their capacity must not be 0.
-        let swap_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-        assert_eq!(init_active_ptr, swap_ptr); // <- swap-proof.
-        assert!(unsafe { &*swap_ptr }.is_empty());
-        assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
+        let swap_buf = buffer_guard.inactive();
+        assert!(swap_buf.is_empty());
+        assert_ne!(swap_buf.capacity(), 0);
 
-        let active_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-        assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
-        assert!(unsafe { &*active_ptr }.is_empty());
-        assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
+        let current_buf = buffer_guard.current();
+        assert!(current_buf.is_empty());
+        assert_ne!(current_buf.capacity(), 0);
 
         tokio::fs::remove_file(full_path)
             .await
@@ -691,11 +638,6 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
-
-        let buffer_guard = store_data.buffer.lock().unwrap();
-        let init_active_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-        let init_swap_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-        drop(buffer_guard); // <- will block the test if not dropped.
 
         let subscriber = Registry::default().with(store);
 
@@ -773,15 +715,13 @@ mod tests {
 
         // Both should be empty now, because the active written has been flushed,
         // and swap is not yet used, but their capacity must not be 0.
-        let swap_ptr = buffer_guard.swap_ptr.load(Ordering::Acquire);
-        assert_eq!(init_active_ptr, swap_ptr); // <- swap-proof.
-        assert!(unsafe { &*swap_ptr }.is_empty());
-        assert_ne!(unsafe { &*swap_ptr }.capacity(), 0);
+        let swap_buf = buffer_guard.inactive();
+        assert!(swap_buf.is_empty());
+        assert_ne!(swap_buf.capacity(), 0);
 
-        let active_ptr = buffer_guard.current_ptr.load(Ordering::Acquire);
-        assert_eq!(init_swap_ptr, active_ptr); // <- swap-proof.
-        assert!(unsafe { &*active_ptr }.is_empty());
-        assert_ne!(unsafe { &*active_ptr }.capacity(), 0);
+        let current_buf = buffer_guard.current();
+        assert!(current_buf.is_empty());
+        assert_ne!(current_buf.capacity(), 0);
 
         tokio::fs::remove_file(full_path)
             .await
