@@ -204,7 +204,7 @@ impl<T> SwapBuffer<T> {
         }
     }
 
-    /// Doesn't load nur store, only changes the access flag of the current buffer.
+    /// Changes the access flag of the current buffer.
     #[inline(always)]
     pub const fn swap(&mut self) {
         self.current ^= 1;
