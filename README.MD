@@ -16,6 +16,7 @@ layers to decentralized embedded control elements.
 * Concurrent from the ground up.
 * Easy to use and reason about.
 * Stingy with resources and efficient in execution.
+* Designed for the age of agents: This was originally intended to be the core promise, and the initial architectural design was created specifically for this purpose. I later decided to take a "slow" approach. The term "agent" is not limited to ML-based agents (LLMs), but also includes **semantic** control agents.
 
 > Note:
 > - No stable data model. It is subject to major changes without prior notice. 
