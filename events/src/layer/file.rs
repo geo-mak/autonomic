@@ -22,6 +22,23 @@ use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
 use crate::trace_error;
 use crate::traits::{EventRecorder, EventWriter, FileExtension, FileStoreFormat};
 
+/// Writes a bytes buffer to the specified file by appending all bytes.
+///
+/// # Parameters
+/// - `buffer`: The source buffer containing bytes to write.
+/// - `path`: The path to the file to write the bytes.
+async fn write_bytes_buffer(buffer: &[u8], path: &Path) -> tokio::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?;
+
+    file.write_all(buffer).await?;
+
+    Ok(())
+}
+
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.
 pub struct CSVFormat;
@@ -61,33 +78,13 @@ impl EventRecorder for CSVFormat {
 impl EventWriter for CSVFormat {
     type BufferType = u8;
 
-    /// Writes the buffer to the file in CSV format.
-    ///
-    /// > **Note**: No internal strategy for handling errors when writing.
-    /// > It only returns an error when writing fails.
+    /// Writes the buffer to the file in CSV format **without** header.
     ///
     /// # Parameters
     /// - `buffer`: The source buffer containing events to write.
-    /// - `file_path`: The path to the file to write the events. Extension is expected to be part of the file name.
-    ///
-    /// # Returns
-    /// - `Ok(())`: if the write operation is successful.
-    /// - `Err(io::Error)`: if the write operation has failed.
+    /// - `file_path`: The path to the file to write the events with the extension.
     async fn write(buffer: &[Self::BufferType], file_path: &Path) -> tokio::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(file_path)
-            .await?;
-
-        // Write CSV header if the file is empty
-        if file.metadata().await?.len() == 0 {
-            let header: &[u8; 38] = b"Level,Source,Message,Target,Timestamp\n";
-            file.write_all(header).await?;
-        }
-
-        file.write_all(buffer).await?;
-        Ok(())
+        write_bytes_buffer(buffer, file_path).await
     }
 }
 
@@ -140,20 +137,8 @@ impl EventWriter for JSONFormat {
     /// # Parameters
     /// - `buffer`: The source buffer containing events to write.
     /// - `file_path`: The path to the file to write the events with the extension.
-    ///
-    /// # Returns
-    /// - `Ok(())`: if the write operation is successful.
-    /// - `Err(io::Error)`: if the write operation has failed.
     async fn write(buffer: &[Self::BufferType], file_path: &Path) -> tokio::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(file_path)
-            .await?;
-
-        file.write_all(buffer).await?;
-
-        Ok(())
+        write_bytes_buffer(buffer, file_path).await
     }
 }
 
@@ -588,7 +573,7 @@ mod tests {
         let full_path = format!("{}/events.csv", cargo_manifest_dir);
 
         let mut reader = ReaderBuilder::new()
-            .has_headers(true)
+            .has_headers(false)
             .from_path(&full_path)
             .expect("Failed to open CSV file");
 
