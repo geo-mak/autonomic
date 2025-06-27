@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::Utc;
 
 use tokio::fs::OpenOptions;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use tracing::{Event, Subscriber};
 
@@ -111,7 +111,7 @@ impl EventRecorder for JSONFormat {
     /// Records and transforms fields in the event and converts recorded fields to a JSON object.
     ///
     /// # Returns
-    /// - `Vec<u8>`: JSON object as bytes-ready string buffer with comma and newline characters.
+    /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Output {
         let mut visitor = DefaultEventVisitor {
             source: String::new(),
@@ -122,7 +122,7 @@ impl EventRecorder for JSONFormat {
 
         // TODO: Should events with no source or message remain allowed?
         format!(
-            ",\n{{\n  \"level\": {},\n  \"source\": \"{}\",\n  \"message\": \"{}\",\n  \"target\": \"{}\",\n  \"timestamp\": \"{}\"\n}}",
+            "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
             level_to_byte(*event.metadata().level()),
             visitor.source,
             visitor.message,
@@ -135,7 +135,7 @@ impl EventRecorder for JSONFormat {
 impl EventWriter for JSONFormat {
     type BufferType = u8;
 
-    /// Writes the buffer to the file in JSON format.
+    /// Writes the buffer to the file in JSON Lines format.
     ///
     /// # Parameters
     /// - `buffer`: The source buffer containing events to write.
@@ -146,37 +146,12 @@ impl EventWriter for JSONFormat {
     /// - `Err(io::Error)`: if the write operation has failed.
     async fn write(buffer: &[Self::BufferType], file_path: &Path) -> tokio::io::Result<()> {
         let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
             .create(true)
+            .append(true)
             .open(file_path)
             .await?;
 
-        let mut buffer = buffer;
-
-        if file.metadata().await?.len() == 0 {
-            // If the file is empty, write the opening bracket
-            file.write_all(b"[\n").await?;
-            // Skip the first comma and newline characters
-            buffer = &buffer[2..];
-        } else {
-            let mut buf = [0; 1];
-            // Move to the last character
-            file.seek(tokio::io::SeekFrom::End(-1)).await?;
-            file.read_exact(&mut buf).await?;
-
-            // If the last character is "]", it must be overwritten
-            if buf[0] == b']' {
-                // Move the file cursor back two bytes to overwrite it
-                file.seek(tokio::io::SeekFrom::End(-2)).await?;
-            }
-        }
-
-        // Write the entire buffer to the file
         file.write_all(buffer).await?;
-
-        // Write the closing bracket
-        file.write_all(b"\n]").await?;
 
         Ok(())
     }
@@ -184,7 +159,7 @@ impl EventWriter for JSONFormat {
 
 impl FileExtension for JSONFormat {
     fn extension() -> &'static str {
-        "json"
+        "jsonl"
     }
 }
 
@@ -684,7 +659,7 @@ mod tests {
         let store = EventsFileStore::<Registry, JSONFormat>::new(
             PathBuf::from(""),
             Duration::from_secs(60),
-            346,
+            303,
         );
 
         let store_data = store.inner().state.clone();
@@ -705,21 +680,25 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let full_path = format!("{}/events.json", cargo_manifest_dir);
+        let full_path = format!("{}/events.jsonl", cargo_manifest_dir);
 
         let file_content = tokio::fs::read_to_string(&full_path)
             .await
-            .expect("Failed to read JSON file");
+            .expect("Failed to read JSON Lines file");
 
-        let json_array: Vec<Value> =
-            serde_json::from_str(&file_content).expect("Failed to parse JSON file as an array");
+        // Parse each line as a separate JSON object
+        let json_objects: Vec<Value> = file_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("Failed to parse JSON line"))
+            .collect();
 
         // We must have only 2 entries for 2 events
         assert_eq!(
-            json_array.len(),
+            json_objects.len(),
             2,
             "Expected 2 entries in the events file, but found {}",
-            json_array.len()
+            json_objects.len()
         );
 
         // Flags to track if we found the expected log entries
@@ -730,8 +709,8 @@ mod tests {
         let expected_info = (2, "event 1", "info message");
         let expected_error = (4, "event 2", "error message");
 
-        // Iterate over each JSON object in the array
-        for entry in json_array.iter() {
+        // Iterate over each JSON object
+        for entry in json_objects.iter() {
             let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
 
             let source = entry
