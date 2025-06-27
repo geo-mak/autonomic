@@ -188,13 +188,34 @@ impl FileExtension for JSONFormat {
     }
 }
 
-pub struct SwapBuffer<T> {
+/// This type is a wrapper around a raw pointer that implements `Send`.
+struct UnsafeBufferRef<T> {
+    ptr: *mut Vec<T>,
+}
+
+unsafe impl<T: Send> Send for UnsafeBufferRef<T> {}
+
+impl<T> std::ops::Deref for UnsafeBufferRef<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.ptr }
+    }
+}
+
+impl<T> std::ops::DerefMut for UnsafeBufferRef<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.ptr }
+    }
+}
+
+struct SwapBuffer<T> {
     buffers: [Box<Vec<T>>; 2],
     current: usize,
 }
 
 impl<T> SwapBuffer<T> {
-    pub fn new(capacity: usize) -> Self {
+    fn new(capacity: usize) -> Self {
         Self {
             buffers: [
                 Box::new(Vec::with_capacity(capacity)),
@@ -206,38 +227,45 @@ impl<T> SwapBuffer<T> {
 
     /// Changes the access flag of the current buffer.
     #[inline(always)]
-    pub const fn swap(&mut self) {
+    const fn swap(&mut self) {
         self.current ^= 1;
     }
 
     #[inline(always)]
-    pub const fn current(&self) -> &Vec<T> {
+    const fn inactive_index(&self) -> usize {
+        self.current ^ 1
+    }
+
+    #[inline(always)]
+    const fn current(&self) -> &Vec<T> {
         &self.buffers[self.current]
     }
 
     #[inline(always)]
-    pub const fn current_mut(&mut self) -> &mut Vec<T> {
+    const fn current_mut(&mut self) -> &mut Vec<T> {
         &mut self.buffers[self.current]
     }
 
-    #[inline]
-    pub const fn inactive(&self) -> &Vec<T> {
+    #[cfg(test)]
+    const fn inactive(&self) -> &Vec<T> {
         &self.buffers[self.inactive_index()]
     }
 
     #[inline]
-    pub const fn inactive_mut(&mut self) -> &mut Vec<T> {
+    const fn inactive_mut(&mut self) -> &mut Vec<T> {
         &mut self.buffers[self.inactive_index()]
     }
 
-    #[inline]
-    pub const fn current_index(&self) -> usize {
-        self.current
-    }
-
-    #[inline]
-    pub const fn inactive_index(&self) -> usize {
-        self.current ^ 1
+    /// Returns lifetime-erased reference to the inactive buffer.
+    ///
+    /// # Safety
+    /// - The reference must not outlive the current instance.
+    /// - Dereferencing must be **exclusive** to avoid a race condition.
+    #[inline(always)]
+    unsafe fn leak_inactive_ref(&mut self) -> UnsafeBufferRef<T> {
+        UnsafeBufferRef {
+            ptr: Box::as_mut(&mut self.buffers[self.inactive_index()]) as *mut Vec<T>,
+        }
     }
 }
 
@@ -335,10 +363,8 @@ where
         interval: Duration,
         limit: u32,
     ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
-        let buffer = Mutex::new(SwapBuffer::new(limit as usize));
-
         let state = Arc::new(SharedState {
-            buffer,
+            buffer: Mutex::new(SwapBuffer::new(limit as usize)),
             limit: limit as usize,
             sig_write: Signal::new(),
             enabled: AtomicBool::new(true),
@@ -376,24 +402,35 @@ where
                     _ = state.sig_write.notified() => {},
                 };
 
-                let inactive_buffer: &mut Vec<_> = {
+                // SAFETY: The following logic relies on `unsafe` code to avoid holding a Mutex lock during
+                // the I/O-bound write operation.
+                // The safety is upheld by these invariants:
+                // 1. Atomicity: The `Mutex` ensures that swapping the buffers and creating a raw pointer
+                //    to the inactive buffer is an atomic operation.
+                // 2. Exclusivity: After the swap, the writer task has exclusive access to the data in the
+                //    inactive buffer via `UnsafeBufferRef`. The `on_event` function only ever accesses
+                //    the *active* buffer. There is no possibility of a data race.
+                // 3. Validity: The raw pointer is valid for the duration of its use because:
+                //    - The buffer `Vec` is within a `Box`, giving it a stable memory location.
+                //    - The `SharedState` is wrapped in an `Arc`, ensuring it (and the buffers it owns)
+                //      lives as long as this task. The `UnsafeBufferRef` is a local variable and does
+                //      not outlive the data it points to.
+                let mut inactive_ref: UnsafeBufferRef<F::BufferType> = {
                     // If poisoned the task will panic and "OnExit" will run.
-                    let mut buffer_guard = state.buffer.lock().unwrap();
+                    let mut buffer_lock = state.buffer.lock().unwrap();
 
-                    let current_ptr = buffer_guard.current_mut() as *mut Vec<F::BufferType>;
-                    let current_buffer = unsafe { &mut *current_ptr };
-
-                    if current_buffer.is_empty() {
+                    if buffer_lock.current().is_empty() {
                         continue;
                     }
 
-                    buffer_guard.swap();
+                    buffer_lock.swap();
 
-                    // This is now inactive.
-                    current_buffer
+                    // A `leaky` reference to the inactive buffer.
+                    unsafe { buffer_lock.leak_inactive_ref() }
+                    // Lock released here.
                 };
 
-                if let Err(e) = F::write(inactive_buffer, &directory).await {
+                if let Err(e) = F::write(&inactive_ref, &directory).await {
                     trace_error!(
                         source = "EventsFileStore",
                         message = format!("Stopped: {}", e)
@@ -401,7 +438,7 @@ where
                     return;
                 }
 
-                inactive_buffer.clear();
+                (*inactive_ref).clear();
             }
         });
     }
@@ -498,6 +535,10 @@ mod tests {
 
         let store_data = store.inner().state.clone();
 
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        debug_assert_eq!(buffer_lock.inactive_index(), 1);
+        drop(buffer_lock);
+
         let subscriber = Registry::default().with(store);
 
         let _guard = subscriber::set_default(subscriber);
@@ -512,6 +553,9 @@ mod tests {
         assert!(!store_data.enabled.load(Ordering::Acquire));
 
         let buffer_guard = store_data.buffer.lock().unwrap();
+
+        debug_assert_eq!(buffer_guard.inactive_index(), 0);
+
         let writing_buf = buffer_guard.inactive();
         assert!(writing_buf.is_empty());
         assert_eq!(writing_buf.capacity(), 0);
@@ -549,6 +593,10 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        debug_assert_eq!(buffer_lock.inactive_index(), 1);
+        drop(buffer_lock);
 
         let subscriber = Registry::default().with(store);
 
@@ -614,6 +662,8 @@ mod tests {
 
         let buffer_guard = store_data.buffer.lock().unwrap();
 
+        debug_assert_eq!(buffer_guard.inactive_index(), 0);
+
         // Both should be empty now, because the active written has been flushed,
         // and swap is not yet used, but their capacity must not be 0.
         let swap_buf = buffer_guard.inactive();
@@ -638,6 +688,10 @@ mod tests {
         );
 
         let store_data = store.inner().state.clone();
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        debug_assert_eq!(buffer_lock.inactive_index(), 1);
+        drop(buffer_lock);
 
         let subscriber = Registry::default().with(store);
 
@@ -712,6 +766,8 @@ mod tests {
         assert!(store_data.enabled.load(Ordering::Acquire));
 
         let buffer_guard = store_data.buffer.lock().unwrap();
+
+        debug_assert_eq!(buffer_guard.inactive_index(), 0);
 
         // Both should be empty now, because the active written has been flushed,
         // and swap is not yet used, but their capacity must not be 0.
