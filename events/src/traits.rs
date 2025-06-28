@@ -38,6 +38,9 @@ pub trait RecorderDirective {
 /// > Callers should ensure that the directive is enabled before recording.
 /// > Recording events without considering the fields is a major **waste of resources**.
 /// > Directive must take into account the visitor and the fields to be recorded.
+///
+/// Options and complex configurations are strongly discouraged.
+/// Each implementation should focus on one way of recoding.
 pub trait EventRecorder {
     /// The directive type that checks if the recorder is enabled based on the current metadata.
     type Directive: RecorderDirective;
@@ -49,25 +52,26 @@ pub trait EventRecorder {
     fn record(event: &Event) -> Self::Output;
 }
 
-/// Trait representing an event writer.
+/// Trait for implementing event writers.
+///
+/// Options and complex configurations are strongly discouraged.
+/// Each implementation should focus on one way of writing to files.
 pub trait EventWriter {
     /// The buffer type the writer can process.
-    type BufferType;
+    type Buffer;
 
     /// Writes the buffer to the file at the specified path.
     /// Returns a future that resolves to the result of the write operation.
     fn write(
-        buffer: &[Self::BufferType],
-        file_path: &Path,
+        buffer: &Self::Buffer,
+        path: &Path,
     ) -> impl Future<Output = tokio::io::Result<()>> + Send;
 }
 
-/// Trait representing the file extension.
-pub trait FileExtension {
-    fn extension() -> &'static str;
-}
-
-/// Trait representing the file store format
+/// Trait representing the file store format.
 /// This trait serves as an association between recorders and writers
 /// to make them aware if each other for the highest possible efficiency.
-pub trait FileStoreFormat: EventRecorder + EventWriter + FileExtension {}
+///
+/// Options and complex configurations are strongly discouraged.
+/// Each implementation should focus on one way of recoding and writing.
+pub trait FileStoreFormat: EventRecorder + EventWriter {}

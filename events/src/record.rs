@@ -136,8 +136,8 @@ impl Visit for DefaultEventVisitor {
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         match field.name() {
-            "source" => self.source = format!("{:?}", value),
-            "message" => self.message = format!("{:?}", value),
+            "source" => self.source = format!("{value:?}"),
+            "message" => self.message = format!("{value:?}"),
             _ => {}
         }
     }
