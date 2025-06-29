@@ -107,11 +107,11 @@ impl Display for ControllerResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ControllerResult::Ok => write!(f, "Ok"),
-            ControllerResult::OkMsg(val) => write!(f, "Ok: {}", val),
+            ControllerResult::OkMsg(val) => write!(f, "Ok: {val}"),
             ControllerResult::Err => write!(f, "Error"),
-            ControllerResult::ErrMsg(err) => write!(f, "Error: {}", err),
+            ControllerResult::ErrMsg(err) => write!(f, "Error: {err}"),
             ControllerResult::Abort => write!(f, "Abort"),
-            ControllerResult::Lock(msg) => write!(f, "Lock: {}", msg),
+            ControllerResult::Lock(msg) => write!(f, "Lock: {msg}"),
         }
     }
 }
@@ -132,19 +132,19 @@ impl Display for OpState {
         match self {
             OpState::Started => write!(f, "Started"),
             OpState::Ok(result) => match result {
-                Some(val) => write!(f, "Ok: {}", val),
+                Some(val) => write!(f, "Ok: {val}"),
                 None => write!(f, "Ok"),
             },
             OpState::Failed(result) => match result {
-                Some(val) => write!(f, "Failed: {}", val),
+                Some(val) => write!(f, "Failed: {val}"),
                 None => write!(f, "Failed"),
             },
             OpState::Aborted => write!(f, "Aborted"),
             OpState::Locked(result) => match result {
-                Some(val) => write!(f, "Locked: {}", val),
+                Some(val) => write!(f, "Locked: {val}"),
                 None => write!(f, "Locked"),
             },
-            OpState::Panicked(val) => write!(f, "Panicked: {}", val),
+            OpState::Panicked(val) => write!(f, "Panicked: {val}"),
         }
     }
 }

@@ -45,7 +45,7 @@ impl RecorderDirective for PublisherDirective {
 pub struct PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder,
+    R: EventRecorder<Export = ()>,
 {
     _subscriber: PhantomData<S>,
     channel: EventChannel<R::Schema>,
@@ -54,7 +54,7 @@ where
 impl<S, R> PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder + 'static,
+    R: EventRecorder<Export = ()> + 'static,
 {
     fn new(buffer: usize) -> Self {
         let (tx, _) = broadcast::channel::<R::Schema>(buffer.max(16));
@@ -68,7 +68,7 @@ where
 impl<S, R> Layer<S> for PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder + 'static,
+    R: EventRecorder<Export = ()> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -97,10 +97,13 @@ where
 /// - `S`: The tracing subscriber that accepts `Filtered` types as layers.
 /// - `R`: The recorder type that filters and records events.
 ///   If not provided, `DefaultRecorder<PublisherDirective>` is used by default.
+///
+/// **Note**: Currently. this type uses the schema of the recorder as its message, and doesn't expect any exports.
+/// It creates a default instance of `R::Schema`, and passes it to the recorder for updating fields. 
 pub struct EventPublisher<S, R = DefaultRecorder<PublisherDirective>>
 where
     S: Subscriber,
-    R: EventRecorder,
+    R: EventRecorder<Export = ()>,
 {
     inner: Filtered<PublisherLayer<S, R>, CallSiteFilter<S, R::Directive>, S>,
 }
@@ -108,7 +111,7 @@ where
 impl<S, R> EventPublisher<S, R>
 where
     S: Subscriber,
-    R: EventRecorder + 'static,
+    R: EventRecorder<Export = ()> + 'static,
 {
     /// Creates new `EventPublisher` instance.
     ///

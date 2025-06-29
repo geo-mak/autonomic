@@ -37,7 +37,7 @@ impl ControllerManager {
     pub fn submit(&mut self, controller: impl Controller + 'static) {
         let id = controller.id();
         if self.controllers.contains_key(id) {
-            panic!("Controller with ID={} already submitted", id);
+            panic!("Controller with ID={id} already submitted");
         } else {
             self.controllers.insert(id, ControlUnit::new(controller));
         }
