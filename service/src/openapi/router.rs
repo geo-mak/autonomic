@@ -62,7 +62,6 @@ pub fn controller_router(manager: &'static ControllerManager) -> Router {
         .fallback(not_implemented)
 }
 
-// But why with wrapper? Because of the 'exceptionally annoying' Rust's orphan rule.
 struct ServiceError(ControllerError);
 
 impl IntoResponse for ServiceError {
