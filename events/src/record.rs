@@ -12,10 +12,14 @@ use tracing::field::Field;
 use tracing_core::Metadata;
 use tracing_core::field::Visit;
 
+use crate::thread_local_instance;
+use crate::traits::PartialReset;
+use crate::traits::ThreadLocalInstance;
 use crate::traits::{EventRecorder, RecorderDirective};
 
 /// Converts `Level` to byte representation.
-pub fn level_to_byte(level: Level) -> u8 {
+#[inline]
+pub const fn level_to_byte(level: Level) -> u8 {
     match level {
         Level::TRACE => 0,
         Level::DEBUG => 1,
@@ -27,16 +31,16 @@ pub fn level_to_byte(level: Level) -> u8 {
 
 /// Default event schema to store recorded fields.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct DefaultEvent {
-    level: u8,
-    source: String,
-    message: String,
-    target: String,
-    timestamp: DateTime<Utc>,
+pub struct DefaultSchema {
+    pub(crate) level: u8,
+    pub(crate) source: String,
+    pub(crate) message: String,
+    pub(crate) target: String,
+    pub(crate) timestamp: DateTime<Utc>,
 }
 
-impl DefaultEvent {
-    pub fn new(
+impl DefaultSchema {
+    pub const fn new(
         level: Level,
         source: String,
         message: String,
@@ -52,20 +56,18 @@ impl DefaultEvent {
         }
     }
 
-    pub fn tracing_level(&self) -> Level {
+    pub const fn tracing_level(&self) -> Level {
         match self.level {
             0 => Level::TRACE,
             1 => Level::DEBUG,
             2 => Level::INFO,
             3 => Level::WARN,
-            4 => Level::ERROR,
-            // Level is not passed as byte in constructor.
-            _ => unreachable!(),
+            _ => Level::ERROR,
         }
     }
 
     #[inline(always)]
-    pub fn level(&self) -> u8 {
+    pub const fn level(&self) -> u8 {
         self.level
     }
 
@@ -90,16 +92,41 @@ impl DefaultEvent {
     }
 }
 
-/// Default fields visitor that records the following fields, if present:
-/// - `source`
-/// - `message`
-pub struct DefaultEventVisitor {
-    pub(crate) source: String,
-    pub(crate) message: String,
+/// Creates a new `DefaultSchema` instance with default values for all fields.
+///
+/// - `level`: Set to `0`.
+/// - `source`: An empty `String`.
+/// - `message`: An empty `String`.
+/// - `target`: An empty `String`.
+/// - `timestamp`: Set to the current UTC time at the moment of creation.
+///
+/// This provides a baseline event with no specific source, message, or target,
+/// and a level of zero.
+impl Default for DefaultSchema {
+    fn default() -> Self {
+        Self {
+            level: 0,
+            source: String::new(),
+            message: String::new(),
+            target: String::new(),
+            timestamp: Utc::now(),
+        }
+    }
+}
+
+impl PartialReset for DefaultSchema {
+    /// Clears all string fields without shrinking their buffers.
+    /// `level` and `timestamp` fields are left without reset.
+    #[inline]
+    fn partial_reset(&mut self) {
+        self.source.clear();
+        self.message.clear();
+        self.target.clear();
+    }
 }
 
 // > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
-impl Visit for DefaultEventVisitor {
+impl Visit for DefaultSchema {
     fn record_str(&mut self, field: &Field, value: &str) {
         let len = value.len();
 
@@ -109,20 +136,29 @@ impl Visit for DefaultEventVisitor {
         }
 
         // Remove quotes if present, which is common when using `format!` macro with debug {:?}
-        let val = if value.as_bytes()[0] == b'"' {
-            let trimmed = &value[1..len - 1];
-            // Empty values are skipped
-            if trimmed.is_empty() {
-                return;
-            };
-            trimmed
+        let val = if len >= 2 {
+            let bytes = value.as_bytes();
+            if bytes[0] == b'"' && bytes[len - 1] == b'"' {
+                let trimmed = &value[1..len - 1];
+                // Empty values are skipped
+                if trimmed.is_empty() {
+                    return;
+                }
+                trimmed
+            } else {
+                value
+            }
         } else {
             value
         };
 
         match field.name() {
-            "source" => self.source = val.to_string(),
-            "message" => self.message = val.to_string(),
+            "source" => {
+                self.source.push_str(val);
+            }
+            "message" => {
+                self.message.push_str(val);
+            }
             _ => {}
         }
     }
@@ -143,6 +179,20 @@ impl Visit for DefaultEventVisitor {
     }
 }
 
+thread_local_instance!(DEFAULT_EVENT_SCHEMA, DefaultSchema);
+
+impl ThreadLocalInstance for DefaultSchema {
+    #[inline]
+    fn thread_instance<F, I>(f: F) -> I
+    where
+        F: FnOnce(&mut Self) -> I,
+    {
+        DEFAULT_EVENT_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
+    }
+}
+
+const DEFAULT_EVENT: &str = "DE";
+
 /// Default directive enables recording default events.
 pub struct DefaultDirective;
 
@@ -152,7 +202,7 @@ impl RecorderDirective for DefaultDirective {
     /// for the same metadata.
     #[inline(always)]
     fn enabled(meta: &Metadata<'_>) -> bool {
-        meta.name().starts_with("DE") // DE: Default Event
+        meta.name().starts_with(DEFAULT_EVENT)
     }
 }
 
@@ -180,25 +230,18 @@ where
 {
     type Directive = T;
 
-    type Output = DefaultEvent;
+    type Schema = DefaultSchema;
+
+    type Export = ();
 
     /// Records the fields in the event and returns recorded fields as `DefaultEvent`.
-    fn record(event: &Event) -> Self::Output {
-        let mut visitor = DefaultEventVisitor {
-            source: String::new(),
-            message: String::new(),
-        };
-
-        event.record(&mut visitor);
-
+    /// Note: Timestamp is not recorded.
+    #[inline]
+    fn record(event: &Event, schema: &mut Self::Schema) {
+        event.record(schema);
         // TODO: Should events with no source or message remain allowed?
-        DefaultEvent::new(
-            *event.metadata().level(),
-            visitor.source,
-            visitor.message,
-            event.metadata().target().to_string(),
-            Utc::now(),
-        )
+        schema.level = level_to_byte(*event.metadata().level());
+        schema.target.push_str(event.metadata().target());
     }
 }
 
@@ -208,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_default_schema_serde() {
-        let original_schema = DefaultEvent::new(
+        let original_schema = DefaultSchema::new(
             Level::INFO,
             "test_source".to_string(),
             "test_message".to_string(),
@@ -219,7 +262,7 @@ mod tests {
         let serialized =
             serde_json::to_string(&original_schema).expect("Failed to serialize DefaultEvent");
 
-        let deserialized_schema: DefaultEvent =
+        let deserialized_schema: DefaultSchema =
             serde_json::from_str(&serialized).expect("Failed to deserialize DefaultEvent");
 
         assert_eq!(original_schema.level(), deserialized_schema.level());

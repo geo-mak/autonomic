@@ -1,3 +1,4 @@
+use core::str;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,25 +19,22 @@ use tracing_subscriber::layer::Context;
 use autonomic_core::sync::Signal;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
+use crate::record::{DefaultDirective, DefaultSchema, level_to_byte};
 use crate::trace_error;
-use crate::traits::{EventRecorder, EventWriter, FileStoreFormat};
+use crate::traits::{
+    EventRecorder, EventWriter, FileStoreFormat, PartialReset, ThreadLocalInstance,
+};
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
-///
-/// # Parameters
-/// - `buffer`: The source buffer containing bytes to write.
-/// - `path`: The path to the file to write the bytes.
-/// - "ext": The file extension.
-async fn write_bytes_buffer(buffer: &[u8], path: &Path, ext: &str) -> tokio::io::Result<()> {
-    // TODO: Add max file size before writing to new file.
+async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path.with_extension(ext))
+        .open(ctx.path())
         .await?;
 
     file.write_all(buffer).await?;
+    file.flush().await?;
 
     Ok(())
 }
@@ -50,26 +48,23 @@ impl FileStoreFormat for CSVFormat {}
 impl EventRecorder for CSVFormat {
     type Directive = DefaultDirective;
 
-    type Output = Vec<u8>;
+    type Schema = DefaultSchema;
+
+    type Export = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to CSV record.
     ///
     /// # Returns
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
-    fn record(event: &Event) -> Self::Output {
-        let mut visitor = DefaultEventVisitor {
-            source: String::new(),
-            message: String::new(),
-        };
-
-        event.record(&mut visitor);
+    fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
+        event.record(schema);
 
         // TODO: Should events with no source or message remain allowed?
         format!(
             "{},\"{}\",\"{}\",\"{}\",{}\n",
             level_to_byte(*event.metadata().level()),
-            visitor.source,
-            visitor.message,
+            &schema.source(),
+            &schema.message(),
             event.metadata().target(),
             Utc::now().to_rfc3339(),
         )
@@ -78,74 +73,64 @@ impl EventRecorder for CSVFormat {
 }
 
 impl EventWriter for CSVFormat {
-    type Buffer = Vec<u8>;
+    type Context = FileContext;
+    type WriteBuffer = Vec<u8>;
 
     /// Writes the buffer to the file in CSV format **without** header.
-    ///
-    /// # Parameters
-    /// - `buffer`: The source buffer containing events to write.
-    /// - `path`: The path to the file to write the events with the extension.
-    async fn write(buffer: &Self::Buffer, path: &Path) -> tokio::io::Result<()> {
-        write_bytes_buffer(buffer, path, "csv").await
+    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
+        write_bytes_buffer(ctx, buffer).await
     }
 }
 
 /// File format for recording and writing events as JSON objects.
-/// The output file has an array structure with each event as an element.
-pub struct JSONFormat;
+pub struct JSONLFormat;
 
-impl FileStoreFormat for JSONFormat {}
+impl FileStoreFormat for JSONLFormat {}
 
-impl EventRecorder for JSONFormat {
+impl EventRecorder for JSONLFormat {
     type Directive = DefaultDirective;
 
-    type Output = Vec<u8>;
+    type Schema = DefaultSchema;
+
+    type Export = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to a JSON object.
     ///
     /// # Returns
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
-    fn record(event: &Event) -> Self::Output {
-        let mut visitor = DefaultEventVisitor {
-            source: String::new(),
-            message: String::new(),
-        };
-
-        event.record(&mut visitor);
+    fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
+        event.record(schema);
 
         // TODO: Should events with no source or message remain allowed?
         format!(
             "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
             level_to_byte(*event.metadata().level()),
-            visitor.source,
-            visitor.message,
+            &schema.source(),
+            &schema.message(),
             event.metadata().target(),
             Utc::now().to_rfc3339(),
         ).into_bytes()
     }
 }
 
-impl EventWriter for JSONFormat {
-    type Buffer = Vec<u8>;
+impl EventWriter for JSONLFormat {
+    type Context = FileContext;
+    type WriteBuffer = Vec<u8>;
 
     /// Writes the buffer to the file in JSON Lines format.
-    ///
-    /// # Parameters
-    /// - `buffer`: The source buffer containing events to write.
-    /// - `path`: The path to the file to write the events with the extension.
-    async fn write(buffer: &Self::Buffer, path: &Path) -> tokio::io::Result<()> {
-        write_bytes_buffer(buffer, path, "jsonl").await
+    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
+        write_bytes_buffer(ctx, buffer).await
     }
 }
 
 /// This type is a wrapper around a raw pointer that implements `Send`.
-struct UnsafeBufferRef<T> {
+struct UnsafeRef<T> {
     ptr: *mut T,
 }
 
-unsafe impl<T: Send> Send for UnsafeBufferRef<T> {}
+unsafe impl<T: Send> Send for UnsafeRef<T> {}
 
-impl<T> std::ops::Deref for UnsafeBufferRef<T> {
+impl<T> std::ops::Deref for UnsafeRef<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -153,7 +138,7 @@ impl<T> std::ops::Deref for UnsafeBufferRef<T> {
     }
 }
 
-impl<T> std::ops::DerefMut for UnsafeBufferRef<T> {
+impl<T> std::ops::DerefMut for UnsafeRef<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.ptr }
     }
@@ -209,10 +194,27 @@ impl<T> SwapBuffer<T> {
     /// - The reference must not outlive the current instance.
     /// - Dereferencing must be **exclusive** to avoid a race condition.
     #[inline(always)]
-    unsafe fn leak_inactive_ref(&mut self) -> UnsafeBufferRef<T> {
-        UnsafeBufferRef {
+    unsafe fn leak_inactive_ref(&mut self) -> UnsafeRef<T> {
+        UnsafeRef {
             ptr: Box::as_mut(&mut self.buffers[self.inactive_index()]) as *mut T,
         }
+    }
+}
+
+pub struct FileContext {
+    path: PathBuf,
+    // ADDENDUM
+}
+
+impl FileContext {
+    #[inline(always)]
+    pub fn new<P: Into<PathBuf>>(path: P) -> Self {
+        Self { path: path.into() }
+    }
+
+    #[inline(always)]
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 
@@ -220,8 +222,8 @@ impl<T> SwapBuffer<T> {
 struct SharedState<T> {
     buffer: Mutex<SwapBuffer<T>>,
     limit: usize,
-    sig_write: Signal,
     enabled: AtomicBool,
+    sig_write: Signal,
 }
 
 /// Executes memory protection logic, when the writing task is no longer running.
@@ -259,10 +261,10 @@ impl<'a> Drop for OnExit<'a> {
 /// It stores events in in-memory buffer and writes them to file in intervals.
 ///
 /// This store has the following memory-protection mechanisms to prevent buffer overflow:
-/// - `Capacity`: The size of the buffer to trigger writing, regardless of the interval.
+/// - `Limit`: The size of the buffer to trigger writing, regardless of the interval.
 /// - `Recording Guard`: Prevents new recordings when the writer task stops due to an error.
 ///
-/// > **Note**: It writes all events to single file named events.{extension},
+/// > **Note**: It writes all events to single file named {prefix}.{extension},
 /// > but this might be changed in the future with more writing options.
 ///
 /// # Type Parameters
@@ -270,7 +272,7 @@ impl<'a> Drop for OnExit<'a> {
 /// - `F`: The format type to record and write events.
 ///
 /// `F` is constrained with additional constraints:
-/// The `Output` of its recorder must be `Vec<u8>` and the `BufferType` of its writer must be `u8`.
+/// The `Output` of its recorder and the `WriteBuffer` of its writer must be `Vec<u8>`.
 /// This allows the same buffer to be used for both recording and writing, where writer can write
 /// the entire buffer with single write operation.
 ///
@@ -286,7 +288,7 @@ where
     S: Subscriber,
     F: FileStoreFormat,
 {
-    state: Arc<SharedState<F::Output>>,
+    state: Arc<SharedState<F::Export>>,
     _s: PhantomData<S>,
     _f: PhantomData<F>,
 }
@@ -294,34 +296,40 @@ where
 impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Output = Vec<u8>, Buffer = Vec<u8>> + 'static,
+    F: FileStoreFormat<Export = Vec<u8>, Context = FileContext, WriteBuffer = Vec<u8>> + 'static,
 {
-    /// Creates new store.
+    /// Creates a new event store backed by a file.
     ///
     /// # Parameters
-    /// - prefix: the prefix of the events' file.
-    /// - `dir`: The directory where events files shall be stored.
-    /// - `interval`: The waiting period before writing events to file.
-    /// - `limit`: The allowed size of the buffer in `bytes` before forcing writing.
+    /// - `interval`: The waiting period before writing events to the file.
+    /// - `limit`: The allowed size of the buffer in bytes before forcing a write.
+    /// - `dir`: The directory where event files will be stored.
+    /// - `prefix`: The prefix for the event file name.
+    /// - `ext`: The file extension for the event file.
     ///
     /// # Returns
-    /// The store fused with its filter as `Filtered` layer.
+    /// Returns the store fused with its filter as a `Filtered` layer.
+    ///
+    /// # Notes
+    /// - The `limit` parameter is a soft limit. The buffer may be allowed to exceed this limit
+    ///   and expand to maintain high throughput.
+    /// - Graceful shutdown is not implemented. The current implementation assumes the exit will
+    ///   be either a forced abort due to panic or write error incidences.
     pub fn new(
-        prefix: &str,
-        mut dir: PathBuf,
         interval: Duration,
         limit: u32,
+        dir: PathBuf,
+        prefix: &str,
+        ext: &str,
     ) -> Filtered<EventsFileStore<S, F>, CallSiteFilter<S, F::Directive>, S> {
-        // TODO: Add max file size before writing to new file.
-
         let state = Arc::new(SharedState {
             buffer: Mutex::new(SwapBuffer::new(
                 Vec::with_capacity(limit as usize),
                 Vec::with_capacity(limit as usize),
             )),
             limit: limit as usize,
-            sig_write: Signal::new(),
             enabled: AtomicBool::new(true),
+            sig_write: Signal::new(),
         });
 
         let instance = Self {
@@ -330,9 +338,12 @@ where
             _f: PhantomData,
         };
 
-        dir.push(prefix);
+        // TODO: Add file options.
+        let ctx = FileContext {
+            path: dir.join(format!("{prefix}.{ext}")),
+        };
 
-        Self::start_writer(dir, interval, state);
+        Self::start_writer(state, interval, ctx);
 
         instance.with_filter(CallSiteFilter::new())
     }
@@ -340,7 +351,7 @@ where
     // TODO: Graceful shutdown is not implemented.
     // The current implementation assumes the exit to be either forced abort because of panic,
     // or write error incidences.
-    fn start_writer(path: PathBuf, interval: Duration, state: Arc<SharedState<F::Output>>) {
+    fn start_writer(state: Arc<SharedState<F::Export>>, interval: Duration, ctx: FileContext) {
         tokio::spawn(async move {
             // The referenced state should remain valid and safe to access until `OnExit` finishes.
             let _on_exit = OnExit::set(&state);
@@ -356,29 +367,29 @@ where
                 // 1. Atomicity: The `Mutex` ensures that swapping the buffers and creating a raw pointer
                 //    to the inactive buffer is an atomic operation.
                 // 2. Exclusivity: After the swap, the writer task has exclusive access to the data in the
-                //    inactive buffer via `UnsafeBufferRef`. The `on_event` function only ever accesses
+                //    inactive buffer via `UnsafeRef`. The `on_event` function only ever accesses
                 //    the *active* buffer. There is no possibility of a data race.
                 // 3. Validity: The raw pointer is valid for the duration of its use because:
                 //    - The buffer `Vec` is within a `Box`, giving it a stable memory location.
                 //    - The `SharedState` is wrapped in an `Arc`, ensuring it (and the buffers it owns)
-                //      lives as long as this task. The `UnsafeBufferRef` is a local variable and does
+                //      lives as long as this task. The `UnsafeRef` is a local variable and does
                 //      not outlive the data it points to.
-                let mut inactive_ref: UnsafeBufferRef<F::Buffer> = {
+                let mut inactive_ref: UnsafeRef<F::WriteBuffer> = {
                     // If poisoned the task will panic and "OnExit" will run.
-                    let mut buffer_lock = state.buffer.lock().unwrap();
+                    let mut protected_buffer = state.buffer.lock().unwrap();
 
-                    if buffer_lock.current().is_empty() {
+                    if protected_buffer.current().is_empty() {
                         continue;
                     }
 
-                    buffer_lock.swap();
+                    protected_buffer.swap();
 
                     // A `leaky` reference to the inactive buffer.
-                    unsafe { buffer_lock.leak_inactive_ref() }
+                    unsafe { protected_buffer.leak_inactive_ref() }
                     // Lock released here.
                 };
 
-                if let Err(e) = F::write(&inactive_ref, &path).await {
+                if let Err(e) = F::write(&ctx, &inactive_ref).await {
                     trace_error!(
                         source = "EventsFileStore",
                         message = format!("Stopped: {}", e)
@@ -395,7 +406,7 @@ where
 impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Output = Vec<u8>, Buffer = Vec<u8>> + 'static,
+    F: FileStoreFormat<Export = Vec<u8>, WriteBuffer = Vec<u8>> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -409,10 +420,15 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let mut record = F::record(event);
+        let mut record = {
+            F::Schema::thread_instance(|schema| {
+                schema.partial_reset();
+                F::record(event, schema)
+            })
+        };
 
-        if let Ok(mut buffer_guard) = self.state.buffer.lock() {
-            let buffer = buffer_guard.current_mut();
+        if let Ok(mut protected_buffer) = self.state.buffer.lock() {
+            let buffer = protected_buffer.current_mut();
 
             // Bitwise non-overlapping copy.
             buffer.append(&mut record);
@@ -438,15 +454,16 @@ mod tests {
 
     use crate::{trace_error, trace_info};
 
-    // Mock file format that simulates a write error
+    // Mock file format that simulates a write error.
     struct MockFileFormat<const PANIC: bool>;
 
     impl<const PANIC: bool> FileStoreFormat for MockFileFormat<PANIC> {}
 
     impl<const PANIC: bool> EventWriter for MockFileFormat<PANIC> {
-        type Buffer = Vec<u8>;
+        type Context = FileContext;
+        type WriteBuffer = Vec<u8>;
 
-        async fn write(_buffer: &Self::Buffer, _file_path: &Path) -> tokio::io::Result<()> {
+        async fn write(_ctx: &Self::Context, _buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
             if PANIC {
                 panic!("Writer thread has panicked")
             } else {
@@ -461,19 +478,22 @@ mod tests {
     impl<const PANIC: bool> EventRecorder for MockFileFormat<PANIC> {
         type Directive = DefaultDirective;
 
-        type Output = Vec<u8>;
+        type Schema = DefaultSchema;
 
-        fn record(_event: &Event) -> Self::Output {
+        type Export = Vec<u8>;
+
+        fn record(_event: &Event, _schema: &mut Self::Schema) -> Self::Export {
             vec![1_u8] // Single byte
         }
     }
 
     async fn test_events_file_store_error<const PANIC: bool>() {
         let store = EventsFileStore::<Registry, MockFileFormat<PANIC>>::new(
-            "events",
-            PathBuf::from(""),
             Duration::from_secs(60),
             1,
+            PathBuf::from(""),
+            "events",
+            "mock",
         );
 
         let store_data = store.inner().state.clone();
@@ -530,10 +550,11 @@ mod tests {
     #[tokio::test]
     async fn test_events_file_store_write_csv() {
         let store = EventsFileStore::<Registry, CSVFormat>::new(
-            "events",
-            PathBuf::from(""),
             Duration::from_secs(60),
             198,
+            PathBuf::from(""),
+            "events",
+            "csv",
         );
 
         let store_data = store.inner().state.clone();
@@ -625,11 +646,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_events_file_store_write_json() {
-        let store = EventsFileStore::<Registry, JSONFormat>::new(
-            "events",
-            PathBuf::from(""),
+        let store = EventsFileStore::<Registry, JSONLFormat>::new(
             Duration::from_secs(60),
             303,
+            PathBuf::from(""),
+            "events",
+            "jsonl",
         );
 
         let store_data = store.inner().state.clone();

@@ -15,6 +15,8 @@ use crate::layer::filter::CallSiteFilter;
 use crate::record::DefaultRecorder;
 use crate::traits::{EventRecorder, RecorderDirective};
 
+const DEFAULT_EVENT_PUBLISHED: &str = "DEP";
+
 /// Reference to the events channel for creating receivers.
 ///
 /// > **Notes**:
@@ -34,7 +36,7 @@ pub struct PublisherDirective;
 impl RecorderDirective for PublisherDirective {
     #[inline(always)]
     fn enabled(meta: &Metadata<'_>) -> bool {
-        meta.name() == "DEP" // DEP: Default Event Published
+        meta.name() == DEFAULT_EVENT_PUBLISHED
     }
 }
 
@@ -46,7 +48,7 @@ where
     R: EventRecorder,
 {
     _subscriber: PhantomData<S>,
-    channel: EventChannel<R::Output>,
+    channel: EventChannel<R::Schema>,
 }
 
 impl<S, R> PublisherLayer<S, R>
@@ -55,7 +57,7 @@ where
     R: EventRecorder + 'static,
 {
     fn new(buffer: usize) -> Self {
-        let (tx, _) = broadcast::channel::<R::Output>(buffer.max(16));
+        let (tx, _) = broadcast::channel::<R::Schema>(buffer.max(16));
         Self {
             _subscriber: PhantomData,
             channel: Arc::new(tx),
@@ -81,7 +83,10 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let _ = self.channel.send(R::record(event));
+        // New instance required, because the same instance is sent without extra formatting.
+        let mut record = R::Schema::default();
+        R::record(event, &mut record);
+        let _ = self.channel.send(record);
     }
 }
 
@@ -122,7 +127,7 @@ where
     /// use tracing_subscriber::Registry;
     ///
     /// use autonomic_events::layer::publisher::{EventChannel, EventPublisher};
-    /// use autonomic_events::record::DefaultEvent;
+    /// use autonomic_events::record::DefaultSchema;
     ///
     ///  // A new publisher with the default recorder and directive
     ///  let publisher = EventPublisher::<Registry>::new(16);
@@ -145,7 +150,7 @@ where
     ///
     /// > **Note**: Recording and publishing events will be **suspended**,
     /// > when there are **no active subscribers** to receive events.
-    pub fn channel(&self) -> EventChannel<R::Output> {
+    pub fn channel(&self) -> EventChannel<R::Schema> {
         self.inner.inner().channel.clone()
     }
 
@@ -159,14 +164,12 @@ where
 mod tests {
     use super::*;
 
-    use chrono::Utc;
-
     use tracing::subscriber;
     use tracing_core::Level;
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use crate::record::DefaultEvent;
+    use crate::record::DefaultSchema;
     use crate::{trace_error, trace_info};
 
     #[tokio::test]
@@ -177,7 +180,7 @@ mod tests {
         let publisher = EventPublisher::<Registry>::new(16);
 
         // A reference to channel before moving publisher
-        let channel: EventChannel<DefaultEvent> = publisher.channel();
+        let channel: EventChannel<DefaultSchema> = publisher.channel();
 
         // Initialize the tracing subscriber with publisher as layer
         let tracing_subscriber = Registry::default().with(publisher.into_layer());
@@ -208,34 +211,17 @@ mod tests {
 
         // -------------------- Test Expected Events ----------------------
 
-        // Expected INFO event
-        let event_1 = DefaultEvent::new(
-            Level::INFO,
-            "published event 1".to_string(),
-            "info message".to_string(),
-            "path".to_string(),
-            Utc::now(),
-        );
-
-        // Expected ERROR event
-        let event_2 = DefaultEvent::new(
-            Level::ERROR,
-            "published event 2".to_string(),
-            "error message".to_string(),
-            "path".to_string(),
-            Utc::now(),
-        );
-
         // Receive events
         let received_event1 = events_receiver.recv().await.unwrap();
         let received_event2 = events_receiver.recv().await.unwrap();
 
-        // Assert subscriber received the expected events
-        assert_eq!(received_event1.source(), event_1.source());
-        assert_eq!(received_event1.message(), event_1.message());
+        assert_eq!(received_event1.tracing_level(), Level::INFO);
+        assert_eq!(received_event1.source(), "published event 1");
+        assert_eq!(received_event1.message(), "info message");
 
-        assert_eq!(received_event2.source(), event_2.source());
-        assert_eq!(received_event2.message(), event_2.message());
+        assert_eq!(received_event2.tracing_level(), Level::ERROR);
+        assert_eq!(received_event2.source(), "published event 2");
+        assert_eq!(received_event2.message(), "error message");
 
         // -------------------- Test Unpublished Events ----------------------
 
