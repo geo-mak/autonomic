@@ -37,13 +37,6 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
     Ok(())
 }
 
-#[inline]
-fn clear_schema(schema: &mut DefaultSchema) {
-    schema.source.clear();
-    schema.message.clear();
-    schema.target.clear();
-}
-
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.
 pub struct CSVFormat;
@@ -62,7 +55,8 @@ impl EventRecorder for CSVFormat {
     /// # Returns
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
     fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
-        clear_schema(schema);
+        schema.source.clear();
+        schema.message.clear();
 
         event.record(schema);
 
@@ -106,7 +100,8 @@ impl EventRecorder for JSONLFormat {
     /// # Returns
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
-        clear_schema(schema);
+        schema.source.clear();
+        schema.message.clear();
 
         event.record(schema);
 
