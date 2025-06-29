@@ -13,7 +13,6 @@ use tracing_core::Metadata;
 use tracing_core::field::Visit;
 
 use crate::thread_local_instance;
-use crate::traits::PartialReset;
 use crate::traits::ThreadLocalInstance;
 use crate::traits::{EventRecorder, RecorderDirective};
 
@@ -114,17 +113,6 @@ impl Default for DefaultSchema {
     }
 }
 
-impl PartialReset for DefaultSchema {
-    /// Clears all string fields without shrinking their buffers.
-    /// `level` and `timestamp` fields are left without reset.
-    #[inline]
-    fn partial_reset(&mut self) {
-        self.source.clear();
-        self.message.clear();
-        self.target.clear();
-    }
-}
-
 // > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
 impl Visit for DefaultSchema {
     fn record_str(&mut self, field: &Field, value: &str) {
@@ -183,7 +171,7 @@ thread_local_instance!(DEFAULT_EVENT_SCHEMA, DefaultSchema);
 
 impl ThreadLocalInstance for DefaultSchema {
     #[inline]
-    fn thread_instance<F, I>(f: F) -> I
+    fn thread_local<F, I>(f: F) -> I
     where
         F: FnOnce(&mut Self) -> I,
     {

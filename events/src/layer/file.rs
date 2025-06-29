@@ -21,9 +21,7 @@ use autonomic_core::sync::Signal;
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultSchema, level_to_byte};
 use crate::trace_error;
-use crate::traits::{
-    EventRecorder, EventWriter, FileStoreFormat, PartialReset, ThreadLocalInstance,
-};
+use crate::traits::{EventRecorder, EventWriter, FileStoreFormat, ThreadLocalInstance};
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
 async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
@@ -37,6 +35,13 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
     file.flush().await?;
 
     Ok(())
+}
+
+#[inline]
+fn clear_schema(schema: &mut DefaultSchema) {
+    schema.source.clear();
+    schema.message.clear();
+    schema.target.clear();
 }
 
 /// File format for recording and writing events in CSV format.
@@ -57,6 +62,8 @@ impl EventRecorder for CSVFormat {
     /// # Returns
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
     fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
+        clear_schema(schema);
+
         event.record(schema);
 
         // TODO: Should events with no source or message remain allowed?
@@ -99,6 +106,8 @@ impl EventRecorder for JSONLFormat {
     /// # Returns
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
+        clear_schema(schema);
+
         event.record(schema);
 
         // TODO: Should events with no source or message remain allowed?
@@ -420,12 +429,7 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let mut record = {
-            F::Schema::thread_instance(|schema| {
-                schema.partial_reset();
-                F::record(event, schema)
-            })
-        };
+        let mut record = { F::Schema::thread_local(|schema| F::record(event, schema)) };
 
         if let Ok(mut protected_buffer) = self.state.buffer.lock() {
             let buffer = protected_buffer.current_mut();

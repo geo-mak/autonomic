@@ -4,26 +4,10 @@ use tracing::{Event, field::Visit};
 
 use tracing_core::Metadata;
 
-/// A trait for types that can be partially reset to a reusable state.
-///
-/// Implementors of this trait must provide a method to reset only the relevant or
-/// mutable parts of the instance, without necessarily restoring it to a pristine, initial state.
-///
-/// This is useful for reusing instances efficiently, such as in pools or performance-critical code,
-/// where full reinitialization or resource deallocation is unnecessary or undesirable.
-pub trait PartialReset {
-    /// Resets a subset of the state of the implementor to its initial values.
-    /// This method allows for partial reinitialization of an instance without requiring a full reset.
-    ///
-    /// The exact behavior depends on the implementor, and it is up to each type to define
-    /// which parts of its state are affected.
-    fn partial_reset(&mut self);
-}
-
 /// A trait for types that provide access to a thread-local instance of themselves.
 ///
 /// This trait enables safe, mutable access to a thread-local instance of the implementing type
-/// by passing a closure to the `thread_instance` method. The closure receives a mutable reference
+/// by passing a closure to the `thread_local` method. The closure receives a mutable reference
 /// to the instance, allowing modifications within the current thread's context.
 ///
 /// This is useful for scenarios where per-thread state is required, such as accumulating
@@ -43,7 +27,7 @@ pub trait ThreadLocalInstance {
     /// # Returns
     ///
     /// Returns the result of the closure `f`.
-    fn thread_instance<F, R>(f: F) -> R
+    fn thread_local<F, R>(f: F) -> R
     where
         F: FnOnce(&mut Self) -> R;
 }
@@ -78,14 +62,14 @@ pub trait RecorderDirective {
 ///
 /// # Associated Types
 /// - `Directive`: Implements [`RecorderDirective`] and determines if recording is enabled for an event.
-/// - `Schema`: Implements [`Visit`], [`Default`], [`PartialReset`], [`ThreadLocalInstance`], and [`Clone`]; accumulates event data.
+/// - `Schema`: Implements [`Visit`], [`Default`], [`ThreadLocalInstance`], and [`Clone`]; accumulates event data.
 /// - `Export`: The final, formatted event data type.
 pub trait EventRecorder {
     /// The directive type used to determine if the recorder is enabled for a given event.
     type Directive: RecorderDirective;
 
     /// The schema type used to accumulate and transform event fields.
-    type Schema: Visit + Default + PartialReset + ThreadLocalInstance + Clone;
+    type Schema: Visit + Default + ThreadLocalInstance + Clone;
 
     /// The type representing the exported, formatted event data.
     /// This can be `()` if not required.
