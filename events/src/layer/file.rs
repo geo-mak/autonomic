@@ -1,4 +1,5 @@
 use core::str;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,16 +90,20 @@ impl EventRecorder for CSVFormat {
 
             event.record(&mut visitor);
 
+            let mut record: Vec<u8> = Vec::new();
+
             // TODO: Should events with no source or message remain allowed?
-            format!(
+            let _ = writeln!(
+                record,
                 "{},\"{}\",\"{}\",\"{}\",{}\n",
                 level_to_byte(*event.metadata().level()),
                 &schema.source,
                 &schema.message,
                 event.metadata().target(),
                 Utc::now().to_rfc3339(),
-            )
-            .into_bytes()
+            );
+
+            record
         })
     }
 }
@@ -136,16 +141,20 @@ impl EventRecorder for JSONLFormat {
 
             event.record(&mut visitor);
 
+            let mut record: Vec<u8> = Vec::new();
+
             // TODO: Should events with no source or message remain allowed?
-            format!(
+            let _ = writeln!(
+                record,
                 "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
                 level_to_byte(*event.metadata().level()),
                 &schema.source,
                 &schema.message,
                 event.metadata().target(),
                 Utc::now().to_rfc3339(),
-            )
-            .into_bytes()
+            );
+
+            record
         })
     }
 }
