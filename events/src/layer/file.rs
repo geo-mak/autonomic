@@ -82,9 +82,10 @@ impl EventRecorder for CSVFormat {
 impl EventWriter for CSVFormat {
     type Context = FileContext;
     type WriteBuffer = Vec<u8>;
+    type WriteResult = tokio::io::Result<()>;
 
     /// Writes the buffer to the file in CSV format **without** header.
-    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
+    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> Self::WriteResult {
         write_bytes_buffer(ctx, buffer).await
     }
 }
@@ -131,9 +132,10 @@ impl EventRecorder for JSONLFormat {
 impl EventWriter for JSONLFormat {
     type Context = FileContext;
     type WriteBuffer = Vec<u8>;
+    type WriteResult = tokio::io::Result<()>;
 
     /// Writes the buffer to the file in JSON Lines format.
-    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
+    async fn write(ctx: &Self::Context, buffer: &Self::WriteBuffer) -> Self::WriteResult {
         write_bytes_buffer(ctx, buffer).await
     }
 }
@@ -312,8 +314,11 @@ impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
     F: EventRecorder<Record = Vec<u8>>
-        + EventWriter<Context = FileContext, WriteBuffer = Vec<u8>>
-        + 'static,
+        + EventWriter<
+            Context = FileContext,
+            WriteBuffer = Vec<u8>,
+            WriteResult = tokio::io::Result<()>,
+        > + 'static,
 {
     /// Creates a new event store backed by a file.
     ///
@@ -472,8 +477,9 @@ mod tests {
     impl<const PANIC: bool> EventWriter for MockFileFormat<PANIC> {
         type Context = FileContext;
         type WriteBuffer = Vec<u8>;
+        type WriteResult = tokio::io::Result<()>;
 
-        async fn write(_ctx: &Self::Context, _buffer: &Self::WriteBuffer) -> tokio::io::Result<()> {
+        async fn write(_ctx: &Self::Context, _buffer: &Self::WriteBuffer) -> Self::WriteResult {
             if PANIC {
                 panic!("Writer thread has panicked")
             } else {

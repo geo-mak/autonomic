@@ -62,10 +62,12 @@ pub trait EventWriter {
     /// The buffer type the writer can process.
     type WriteBuffer;
 
+    type WriteResult;
+
     /// Writes the buffer to the file at the specified path.
     /// Returns a future that resolves to the result of the write operation.
     fn write(
         ctx: &Self::Context,
         buffer: &Self::WriteBuffer,
-    ) -> impl Future<Output = tokio::io::Result<()>> + Send;
+    ) -> impl Future<Output = Self::WriteResult> + Send;
 }
