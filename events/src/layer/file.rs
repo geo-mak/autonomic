@@ -162,14 +162,14 @@ impl<T> std::ops::DerefMut for UnsafeRef<T> {
 }
 
 struct SwapBuffer<T> {
-    buffers: [Box<T>; 2],
+    buffers: [T; 2],
     current: usize,
 }
 
 impl<T> SwapBuffer<T> {
     fn new(a: T, b: T) -> Self {
         Self {
-            buffers: [Box::new(a), Box::new(b)],
+            buffers: [a, b],
             current: 0,
         }
     }
@@ -210,11 +210,14 @@ impl<T> SwapBuffer<T> {
     /// # Safety
     /// - The reference must not outlive the current instance.
     /// - Dereferencing must be **exclusive** to avoid a race condition.
+    /// - This is only safe because the containing SwapBuffer is owned by Arc,
+    ///   ensuring stable memory location.
+    /// - The caller must ensure no other code accesses the inactive buffer
+    ///   until this reference is dropped.
     #[inline(always)]
     unsafe fn leak_inactive_ref(&mut self) -> UnsafeRef<T> {
-        UnsafeRef {
-            ptr: Box::as_mut(&mut self.buffers[self.inactive_index()]) as *mut T,
-        }
+        let ptr = &mut self.buffers[self.inactive_index()] as *mut T;
+        UnsafeRef { ptr }
     }
 }
 
@@ -385,17 +388,21 @@ where
 
                 // SAFETY: The following logic relies on `unsafe` code to avoid holding a Mutex lock during
                 // the I/O-bound write operation.
+                //
                 // The safety is upheld by these invariants:
+                //
                 // 1. Atomicity: The `Mutex` ensures that swapping the buffers and creating a raw pointer
                 //    to the inactive buffer is an atomic operation.
+                //
                 // 2. Exclusivity: After the swap, the writer task has exclusive access to the data in the
                 //    inactive buffer via `UnsafeRef`. The `on_event` function only ever accesses
-                //    the *active* buffer. There is no possibility of a data race.
+                //    the *active* buffer. The reference to the inactive buffer (`inactive_ref`) is always
+                //    dropped before the next swap occurs in the loop. There is no possibility of a data race.
+                //
                 // 3. Validity: The raw pointer is valid for the duration of its use because:
-                //    - The buffer `Vec` is within a `Box`, giving it a stable memory location.
                 //    - The `SharedState` is wrapped in an `Arc`, ensuring it (and the buffers it owns)
-                //      lives as long as this task. The `UnsafeRef` is a local variable and does
-                //      not outlive the data it points to.
+                //      lives as long as this task and has a stable memory location.
+                //    - The `UnsafeRef` is a local variable and does not outlive the data it points to.
                 let mut inactive_ref: UnsafeRef<F::WriteBuffer> = {
                     // If poisoned the task will panic and "OnExit" will run.
                     let mut protected_buffer = state.buffer.lock().unwrap();
@@ -416,7 +423,7 @@ where
                         source = "EventsFileStore",
                         message = format!("Stopped: {}", e)
                     );
-                    return;
+                    return; // <- Exit here.
                 }
 
                 (*inactive_ref).clear();
