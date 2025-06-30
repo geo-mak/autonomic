@@ -19,12 +19,12 @@ use autonomic_core::traits::ThreadLocalInstance;
 use crate::traits::{EventRecorder, RecorderDirective};
 
 #[derive(Default)]
-pub struct DefaultEventSchema {
+pub struct DefaultEventCache {
     pub source: String,
     pub message: String,
 }
 
-impl DefaultEventSchema {
+impl DefaultEventCache {
     #[inline]
     pub fn clear(&mut self) {
         self.source.clear();
@@ -32,15 +32,15 @@ impl DefaultEventSchema {
     }
 }
 
-thread_local_instance!(__TLS_DEFAULT_EVENT_SCHEMA, DefaultEventSchema);
+thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEventCache);
 
-impl ThreadLocalInstance for DefaultEventSchema {
+impl ThreadLocalInstance for DefaultEventCache {
     #[inline]
     fn thread_local<F, I>(f: F) -> I
     where
         F: FnOnce(&mut Self) -> I,
     {
-        __TLS_DEFAULT_EVENT_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
+        __TLS_DEFAULT_EVENT_CACHE.with(|cell| f(&mut cell.borrow_mut()))
     }
 }
 

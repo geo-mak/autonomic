@@ -21,7 +21,7 @@ use autonomic_core::sync::Signal;
 use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultEventSchema, DefaultEventVisitor, level_to_byte};
+use crate::record::{DefaultDirective, DefaultEventCache, DefaultEventVisitor, level_to_byte};
 use crate::trace_error;
 use crate::traits::{EventRecorder, EventWriter};
 
@@ -54,10 +54,10 @@ impl EventRecorder for CSVFormat {
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
         // TODO: Further reduce memory usage and allocations.
-        DefaultEventSchema::thread_local(|schema| {
-            schema.clear();
+        DefaultEventCache::thread_local(|cache| {
+            cache.clear();
 
-            let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);
+            let mut visitor = DefaultEventVisitor::new(&mut cache.source, &mut cache.message);
 
             event.record(&mut visitor);
 
@@ -68,8 +68,8 @@ impl EventRecorder for CSVFormat {
                 record,
                 "{},\"{}\",\"{}\",\"{}\",{}\n",
                 level_to_byte(*event.metadata().level()),
-                &schema.source,
-                &schema.message,
+                &cache.source,
+                &cache.message,
                 event.metadata().target(),
                 Utc::now().to_rfc3339(),
             );
@@ -103,10 +103,10 @@ impl EventRecorder for JSONLFormat {
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
         // TODO: Further reduce memory usage and allocations.
-        DefaultEventSchema::thread_local(|schema| {
-            schema.clear();
+        DefaultEventCache::thread_local(|cache| {
+            cache.clear();
 
-            let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);
+            let mut visitor = DefaultEventVisitor::new(&mut cache.source, &mut cache.message);
 
             event.record(&mut visitor);
 
@@ -117,8 +117,8 @@ impl EventRecorder for JSONLFormat {
                 record,
                 "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
                 level_to_byte(*event.metadata().level()),
-                &schema.source,
-                &schema.message,
+                &cache.source,
+                &cache.message,
                 event.metadata().target(),
                 Utc::now().to_rfc3339(),
             );
