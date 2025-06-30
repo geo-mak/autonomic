@@ -292,7 +292,7 @@ where
     S: Subscriber,
     F: FileStoreFormat,
 {
-    state: Arc<SharedState<F::Export>>,
+    state: Arc<SharedState<F::WriteBuffer>>,
     _s: PhantomData<S>,
     _f: PhantomData<F>,
 }
@@ -300,7 +300,12 @@ where
 impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Export = Vec<u8>, Context = FileContext, WriteBuffer = Vec<u8>> + 'static,
+    F: FileStoreFormat<
+            Schema: ThreadLocalInstance,
+            Export = Vec<u8>,
+            Context = FileContext,
+            WriteBuffer = Vec<u8>,
+        > + 'static,
 {
     /// Creates a new event store backed by a file.
     ///
@@ -355,7 +360,7 @@ where
     // TODO: Graceful shutdown is not implemented.
     // The current implementation assumes the exit to be either forced abort because of panic,
     // or write error incidences.
-    fn start_writer(state: Arc<SharedState<F::Export>>, interval: Duration, ctx: FileContext) {
+    fn start_writer(state: Arc<SharedState<F::WriteBuffer>>, interval: Duration, ctx: FileContext) {
         tokio::spawn(async move {
             // The referenced state should remain valid and safe to access until `OnExit` finishes.
             let _on_exit = OnExit::set(&state);
@@ -410,7 +415,8 @@ where
 impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Export = Vec<u8>, WriteBuffer = Vec<u8>> + 'static,
+    F: FileStoreFormat<Schema: ThreadLocalInstance, Export = Vec<u8>, WriteBuffer = Vec<u8>>
+        + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it

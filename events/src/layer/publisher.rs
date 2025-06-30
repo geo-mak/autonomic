@@ -54,7 +54,7 @@ where
 impl<S, R> PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Export = ()> + 'static,
+    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
 {
     fn new(buffer: usize) -> Self {
         let (tx, _) = broadcast::channel::<R::Schema>(buffer.max(16));
@@ -68,7 +68,7 @@ where
 impl<S, R> Layer<S> for PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Export = ()> + 'static,
+    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -99,7 +99,7 @@ where
 ///   If not provided, `DefaultRecorder<PublisherDirective>` is used by default.
 ///
 /// **Note**: Currently. this type uses the schema of the recorder as its message, and doesn't expect any exports.
-/// It creates a default instance of `R::Schema`, and passes it to the recorder for updating fields. 
+/// It creates a default instance of `R::Schema`, and passes it to the recorder for updating fields.
 pub struct EventPublisher<S, R = DefaultRecorder<PublisherDirective>>
 where
     S: Subscriber,
@@ -111,7 +111,7 @@ where
 impl<S, R> EventPublisher<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Export = ()> + 'static,
+    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
 {
     /// Creates new `EventPublisher` instance.
     ///

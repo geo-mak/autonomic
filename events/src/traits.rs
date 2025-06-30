@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use tracing::{Event, field::Visit};
+use tracing::Event;
 
 use tracing_core::Metadata;
 
@@ -12,7 +12,7 @@ use tracing_core::Metadata;
 ///
 /// This is useful for scenarios where per-thread state is required, such as accumulating
 /// event data or maintaining reusable buffers without synchronization overhead.
-pub trait ThreadLocalInstance {
+pub trait ThreadLocalInstance: Default {
     /// Provides access to a thread-local instance of the type, allowing a closure to operate on it.
     ///
     /// # Note
@@ -46,8 +46,8 @@ pub trait RecorderDirective {
 ///
 /// Types implementing this trait play three roles:
 /// - `Directive`: Checks if the recorder is enabled for the event metadata.
-/// - `Schema`: Accumulates event fields via the [`Visit`] trait.
-/// - `Formatter`: Transforms accumulated fields into the export type.
+/// - `Schema`: Accumulates event fields.
+/// - `Formatter`: Transforms accumulated fields into the export type, if needed.
 ///
 /// All roles operate according to an expected event structure, with varying strictness.
 /// For example, `Directive` may only check for general compliance markers in metadata,
@@ -62,14 +62,14 @@ pub trait RecorderDirective {
 ///
 /// # Associated Types
 /// - `Directive`: Implements [`RecorderDirective`] and determines if recording is enabled for an event.
-/// - `Schema`: Implements [`Visit`], [`Default`], [`ThreadLocalInstance`], and [`Clone`]; accumulates event data.
-/// - `Export`: The final, formatted event data type.
+/// - `Schema`: accumulates and formats event data.
+/// - `Export`: The final, formatted event data type, if required.
 pub trait EventRecorder {
     /// The directive type used to determine if the recorder is enabled for a given event.
     type Directive: RecorderDirective;
 
     /// The schema type used to accumulate and transform event fields.
-    type Schema: Visit + Default + ThreadLocalInstance + Clone;
+    type Schema;
 
     /// The type representing the exported, formatted event data.
     /// This can be `()` if not required.
@@ -79,10 +79,10 @@ pub trait EventRecorder {
     ///
     /// # Arguments
     /// * `event` - The event to record.
-    /// * `schema` - A mutable reference to the schema for accumulating event data.
+    /// * `schema` - A mutable reference to the schema.
     ///
     /// # Returns
-    /// The formatted event data as `Self::Export`.
+    /// The formatted event data as `Self::Export`, if specified.
     fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export;
 }
 
