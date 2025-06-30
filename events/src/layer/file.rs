@@ -23,7 +23,7 @@ use autonomic_core::traits::ThreadLocalInstance;
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventSchema, DefaultEventVisitor, level_to_byte};
 use crate::trace_error;
-use crate::traits::{EventRecorder, EventWriter, FileStoreFormat};
+use crate::traits::{EventRecorder, EventWriter};
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
 async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
@@ -42,8 +42,6 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.
 pub struct CSVFormat;
-
-impl FileStoreFormat for CSVFormat {}
 
 impl EventRecorder for CSVFormat {
     type Directive = DefaultDirective;
@@ -93,8 +91,6 @@ impl EventWriter for CSVFormat {
 
 /// File format for recording and writing events as JSON objects.
 pub struct JSONLFormat;
-
-impl FileStoreFormat for JSONLFormat {}
 
 impl EventRecorder for JSONLFormat {
     type Directive = DefaultDirective;
@@ -305,7 +301,7 @@ impl<'a> Drop for OnExit<'a> {
 pub struct EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat,
+    F: EventRecorder + EventWriter,
 {
     state: Arc<SharedState<F::WriteBuffer>>,
     _s: PhantomData<S>,
@@ -315,7 +311,9 @@ where
 impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Record = Vec<u8>, Context = FileContext, WriteBuffer = Vec<u8>> + 'static,
+    F: EventRecorder<Record = Vec<u8>>
+        + EventWriter<Context = FileContext, WriteBuffer = Vec<u8>>
+        + 'static,
 {
     /// Creates a new event store backed by a file.
     ///
@@ -425,7 +423,7 @@ where
 impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Record = Vec<u8>, WriteBuffer = Vec<u8>> + 'static,
+    F: EventRecorder<Record = Vec<u8>> + EventWriter<WriteBuffer = Vec<u8>> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -470,8 +468,6 @@ mod tests {
 
     // Mock file format that simulates a write error.
     struct MockFileFormat<const PANIC: bool>;
-
-    impl<const PANIC: bool> FileStoreFormat for MockFileFormat<PANIC> {}
 
     impl<const PANIC: bool> EventWriter for MockFileFormat<PANIC> {
         type Context = FileContext;

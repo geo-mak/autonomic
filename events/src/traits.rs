@@ -69,11 +69,3 @@ pub trait EventWriter {
         buffer: &Self::WriteBuffer,
     ) -> impl Future<Output = tokio::io::Result<()>> + Send;
 }
-
-/// Trait representing the file store format.
-/// This trait serves as an association between recorders and writers
-/// to make them aware if each other for the highest possible efficiency.
-///
-/// Options and complex configurations are strongly discouraged.
-/// Each implementation should focus on one way of recoding and writing.
-pub trait FileStoreFormat: EventRecorder + EventWriter {}
