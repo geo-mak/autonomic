@@ -46,44 +46,37 @@ pub trait RecorderDirective {
 ///
 /// Types implementing this trait play three roles:
 /// - `Directive`: Checks if the recorder is enabled for the event metadata.
-/// - `Schema`: Accumulates event fields.
-/// - `Formatter`: Transforms accumulated fields into the export type, if needed.
+/// - `Formatter`: Transforms event fields into the export type, if needed.
 ///
 /// All roles operate according to an expected event structure, with varying strictness.
 /// For example, `Directive` may only check for general compliance markers in metadata,
-/// while `Schema` and formatting may record and transform only a subset of fields.
+/// while formatting may record and transform only a subset of fields.
 ///
 /// **Guidelines:**
 /// - Avoid complex configurations; each implementation should focus on a single recording strategy.
 /// - `Directive` is intended as a lightweight condition for use in `Layer<S>` or `Filter<S>`.
 /// - Callers should check if the directive is enabled before recording.
 /// - Recording events without considering their fields is discouraged and wasteful.
-/// - `Directive` should be aware of the schema and its fields.
+/// - `Directive` should be aware of the event fields.
 ///
 /// # Associated Types
 /// - `Directive`: Implements [`RecorderDirective`] and determines if recording is enabled for an event.
-/// - `Schema`: accumulates and formats event data.
-/// - `Export`: The final, formatted event data type, if required.
+/// - `Record`: The final, formatted event data type.
 pub trait EventRecorder {
     /// The directive type used to determine if the recorder is enabled for a given event.
     type Directive: RecorderDirective;
 
-    /// The schema type used to accumulate and transform event fields.
-    type Schema;
-
     /// The type representing the exported, formatted event data.
-    /// This can be `()` if not required.
-    type Export;
+    type Record;
 
     /// Records the given event, transforming its fields and returning the formatted export.
     ///
     /// # Arguments
     /// * `event` - The event to record.
-    /// * `schema` - A mutable reference to the schema.
     ///
     /// # Returns
-    /// The formatted event data as `Self::Export`, if specified.
-    fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export;
+    /// The formatted event data as `Self::Record`.
+    fn record(event: &Event) -> Self::Record;
 }
 
 /// Trait for implementing event writers.

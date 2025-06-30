@@ -45,19 +45,19 @@ impl RecorderDirective for PublisherDirective {
 pub struct PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Export = ()>,
+    R: EventRecorder,
 {
     _subscriber: PhantomData<S>,
-    channel: EventChannel<R::Schema>,
+    channel: EventChannel<R::Record>,
 }
 
 impl<S, R> PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
+    R: EventRecorder<Record: Clone> + 'static,
 {
     fn new(buffer: usize) -> Self {
-        let (tx, _) = broadcast::channel::<R::Schema>(buffer.max(16));
+        let (tx, _) = broadcast::channel::<R::Record>(buffer.max(16));
         Self {
             _subscriber: PhantomData,
             channel: Arc::new(tx),
@@ -68,7 +68,7 @@ where
 impl<S, R> Layer<S> for PublisherLayer<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
+    R: EventRecorder<Record: Clone> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -83,9 +83,7 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        // New instance required, because the same instance is sent without extra formatting.
-        let mut record = R::Schema::default();
-        R::record(event, &mut record);
+        let record = R::record(event);
         let _ = self.channel.send(record);
     }
 }
@@ -103,7 +101,7 @@ where
 pub struct EventPublisher<S, R = DefaultRecorder<PublisherDirective>>
 where
     S: Subscriber,
-    R: EventRecorder<Export = ()>,
+    R: EventRecorder<Record: Clone>,
 {
     inner: Filtered<PublisherLayer<S, R>, CallSiteFilter<S, R::Directive>, S>,
 }
@@ -111,7 +109,7 @@ where
 impl<S, R> EventPublisher<S, R>
 where
     S: Subscriber,
-    R: EventRecorder<Schema: Default + Clone, Export = ()> + 'static,
+    R: EventRecorder<Record: Clone> + 'static,
 {
     /// Creates new `EventPublisher` instance.
     ///
@@ -130,7 +128,7 @@ where
     /// use tracing_subscriber::Registry;
     ///
     /// use autonomic_events::layer::publisher::{EventChannel, EventPublisher};
-    /// use autonomic_events::record::DefaultSchema;
+    /// use autonomic_events::record::DefaultEvent;
     ///
     ///  // A new publisher with the default recorder and directive
     ///  let publisher = EventPublisher::<Registry>::new(16);
@@ -153,7 +151,7 @@ where
     ///
     /// > **Note**: Recording and publishing events will be **suspended**,
     /// > when there are **no active subscribers** to receive events.
-    pub fn channel(&self) -> EventChannel<R::Schema> {
+    pub fn channel(&self) -> EventChannel<R::Record> {
         self.inner.inner().channel.clone()
     }
 
@@ -172,7 +170,7 @@ mod tests {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use crate::record::DefaultSchema;
+    use crate::record::DefaultEvent;
     use crate::{trace_error, trace_info};
 
     #[tokio::test]
@@ -183,7 +181,7 @@ mod tests {
         let publisher = EventPublisher::<Registry>::new(16);
 
         // A reference to channel before moving publisher
-        let channel: EventChannel<DefaultSchema> = publisher.channel();
+        let channel: EventChannel<DefaultEvent> = publisher.channel();
 
         // Initialize the tracing subscriber with publisher as layer
         let tracing_subscriber = Registry::default().with(publisher.into_layer());

@@ -12,8 +12,6 @@ use tracing::field::Field;
 use tracing_core::Metadata;
 use tracing_core::field::Visit;
 
-use crate::thread_local_instance;
-use crate::traits::ThreadLocalInstance;
 use crate::traits::{EventRecorder, RecorderDirective};
 
 /// Converts `Level` to byte representation.
@@ -30,7 +28,7 @@ pub const fn level_to_byte(level: Level) -> u8 {
 
 /// Default event schema to store recorded fields.
 #[derive(Serialize, Deserialize, Clone)]
-pub struct DefaultSchema {
+pub struct DefaultEvent {
     pub(crate) level: u8,
     pub(crate) source: String,
     pub(crate) message: String,
@@ -38,7 +36,7 @@ pub struct DefaultSchema {
     pub(crate) timestamp: DateTime<Utc>,
 }
 
-impl DefaultSchema {
+impl DefaultEvent {
     pub const fn new(
         level: Level,
         source: String,
@@ -61,7 +59,8 @@ impl DefaultSchema {
             1 => Level::DEBUG,
             2 => Level::INFO,
             3 => Level::WARN,
-            _ => Level::ERROR,
+            4 => Level::ERROR,
+            _ => unreachable!(),
         }
     }
 
@@ -101,7 +100,8 @@ impl DefaultSchema {
 ///
 /// This provides a baseline event with no specific source, message, or target,
 /// and a level of zero.
-impl Default for DefaultSchema {
+impl Default for DefaultEvent {
+    #[inline]
     fn default() -> Self {
         Self {
             level: 0,
@@ -113,8 +113,25 @@ impl Default for DefaultSchema {
     }
 }
 
+/// A visitor struct that holds mutable references to a source and message string.
+///
+/// # Recording Fields
+/// - `source`: As str or debug only.
+/// - `message`: As str, debug or error.
+pub struct DefaultEventVisitor<'a> {
+    source: &'a mut String,
+    message: &'a mut String,
+}
+
+impl<'a> DefaultEventVisitor<'a> {
+    #[inline(always)]
+    pub const fn new(source: &'a mut String, message: &'a mut String) -> Self {
+        Self { source, message }
+    }
+}
+
 // > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
-impl Visit for DefaultSchema {
+impl<'a> Visit for DefaultEventVisitor<'a> {
     fn record_str(&mut self, field: &Field, value: &str) {
         let len = value.len();
 
@@ -154,28 +171,16 @@ impl Visit for DefaultSchema {
     fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
         // Only message is allowed to be recorded as error
         if field.name() == "message" {
-            self.message = value.to_string();
+            *self.message = value.to_string();
         }
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         match field.name() {
-            "source" => self.source = format!("{value:?}"),
-            "message" => self.message = format!("{value:?}"),
+            "source" => *self.source = format!("{value:?}"),
+            "message" => *self.message = format!("{value:?}"),
             _ => {}
         }
-    }
-}
-
-thread_local_instance!(DEFAULT_EVENT_SCHEMA, DefaultSchema);
-
-impl ThreadLocalInstance for DefaultSchema {
-    #[inline]
-    fn thread_local<F, I>(f: F) -> I
-    where
-        F: FnOnce(&mut Self) -> I,
-    {
-        DEFAULT_EVENT_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
     }
 }
 
@@ -218,18 +223,23 @@ where
 {
     type Directive = T;
 
-    type Schema = DefaultSchema;
-
-    type Export = ();
+    type Record = DefaultEvent;
 
     /// Records the fields in the event and returns recorded fields as `DefaultEvent`.
     /// Note: Timestamp is not recorded.
     #[inline]
-    fn record(event: &Event, schema: &mut Self::Schema) {
-        event.record(schema);
+    fn record(event: &Event) -> Self::Record {
+        let mut record = Self::Record::default();
+
+        let mut visitor = DefaultEventVisitor::new(&mut record.source, &mut record.message);
+
+        event.record(&mut visitor);
+
         // TODO: Should events with no source or message remain allowed?
-        schema.level = level_to_byte(*event.metadata().level());
-        schema.target.push_str(event.metadata().target());
+        record.level = level_to_byte(*event.metadata().level());
+        record.target.push_str(event.metadata().target());
+
+        record
     }
 }
 
@@ -239,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_default_schema_serde() {
-        let original_schema = DefaultSchema::new(
+        let original_schema = DefaultEvent::new(
             Level::INFO,
             "test_source".to_string(),
             "test_message".to_string(),
@@ -250,7 +260,7 @@ mod tests {
         let serialized =
             serde_json::to_string(&original_schema).expect("Failed to serialize DefaultEvent");
 
-        let deserialized_schema: DefaultSchema =
+        let deserialized_schema: DefaultEvent =
             serde_json::from_str(&serialized).expect("Failed to deserialize DefaultEvent");
 
         assert_eq!(original_schema.level(), deserialized_schema.level());

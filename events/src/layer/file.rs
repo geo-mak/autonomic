@@ -19,9 +19,35 @@ use tracing_subscriber::layer::Context;
 use autonomic_core::sync::Signal;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultSchema, level_to_byte};
-use crate::trace_error;
+use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
 use crate::traits::{EventRecorder, EventWriter, FileStoreFormat, ThreadLocalInstance};
+use crate::{thread_local_instance, trace_error};
+
+#[derive(Default)]
+pub struct DefaultStoreSchema {
+    pub source: String,
+    pub message: String,
+}
+
+impl DefaultStoreSchema {
+    #[inline]
+    pub fn clear(&mut self) {
+        self.source.clear();
+        self.message.clear();
+    }
+}
+
+thread_local_instance!(__DEFAULT_STORE_SCHEMA, DefaultStoreSchema);
+
+impl ThreadLocalInstance for DefaultStoreSchema {
+    #[inline]
+    fn thread_local<F, I>(f: F) -> I
+    where
+        F: FnOnce(&mut Self) -> I,
+    {
+        __DEFAULT_STORE_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
+    }
+}
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
 async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
@@ -46,30 +72,32 @@ impl FileStoreFormat for CSVFormat {}
 impl EventRecorder for CSVFormat {
     type Directive = DefaultDirective;
 
-    type Schema = DefaultSchema;
-
-    type Export = Vec<u8>;
+    type Record = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to CSV record.
     ///
     /// # Returns
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
-    fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
-        schema.source.clear();
-        schema.message.clear();
+    fn record(event: &Event) -> Self::Record {
+        // TODO: Further reduce memory usage and allocations.
+        DefaultStoreSchema::thread_local(|schema| {
+            schema.clear();
 
-        event.record(schema);
+            let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);
 
-        // TODO: Should events with no source or message remain allowed?
-        format!(
-            "{},\"{}\",\"{}\",\"{}\",{}\n",
-            level_to_byte(*event.metadata().level()),
-            &schema.source(),
-            &schema.message(),
-            event.metadata().target(),
-            Utc::now().to_rfc3339(),
-        )
-        .into_bytes()
+            event.record(&mut visitor);
+
+            // TODO: Should events with no source or message remain allowed?
+            format!(
+                "{},\"{}\",\"{}\",\"{}\",{}\n",
+                level_to_byte(*event.metadata().level()),
+                &schema.source,
+                &schema.message,
+                event.metadata().target(),
+                Utc::now().to_rfc3339(),
+            )
+            .into_bytes()
+        })
     }
 }
 
@@ -91,29 +119,32 @@ impl FileStoreFormat for JSONLFormat {}
 impl EventRecorder for JSONLFormat {
     type Directive = DefaultDirective;
 
-    type Schema = DefaultSchema;
-
-    type Export = Vec<u8>;
+    type Record = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to a JSON object.
     ///
     /// # Returns
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
-    fn record(event: &Event, schema: &mut Self::Schema) -> Self::Export {
-        schema.source.clear();
-        schema.message.clear();
+    fn record(event: &Event) -> Self::Record {
+        // TODO: Further reduce memory usage and allocations.
+        DefaultStoreSchema::thread_local(|schema| {
+            schema.clear();
 
-        event.record(schema);
+            let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);
 
-        // TODO: Should events with no source or message remain allowed?
-        format!(
-            "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
-            level_to_byte(*event.metadata().level()),
-            &schema.source(),
-            &schema.message(),
-            event.metadata().target(),
-            Utc::now().to_rfc3339(),
-        ).into_bytes()
+            event.record(&mut visitor);
+
+            // TODO: Should events with no source or message remain allowed?
+            format!(
+                "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
+                level_to_byte(*event.metadata().level()),
+                &schema.source,
+                &schema.message,
+                event.metadata().target(),
+                Utc::now().to_rfc3339(),
+            )
+            .into_bytes()
+        })
     }
 }
 
@@ -300,12 +331,7 @@ where
 impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<
-            Schema: ThreadLocalInstance,
-            Export = Vec<u8>,
-            Context = FileContext,
-            WriteBuffer = Vec<u8>,
-        > + 'static,
+    F: FileStoreFormat<Record = Vec<u8>, Context = FileContext, WriteBuffer = Vec<u8>> + 'static,
 {
     /// Creates a new event store backed by a file.
     ///
@@ -415,8 +441,7 @@ where
 impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: FileStoreFormat<Schema: ThreadLocalInstance, Export = Vec<u8>, WriteBuffer = Vec<u8>>
-        + 'static,
+    F: FileStoreFormat<Record = Vec<u8>, WriteBuffer = Vec<u8>> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -430,13 +455,13 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let mut record = { F::Schema::thread_local(|schema| F::record(event, schema)) };
+        let mut record = F::record(event);
 
         if let Ok(mut protected_buffer) = self.state.buffer.lock() {
             let buffer = protected_buffer.current_mut();
 
-            // Bitwise non-overlapping copy.
             buffer.append(&mut record);
+            // Bitwise non-overlapping copy.
 
             if buffer.len() >= self.state.limit {
                 self.state.sig_write.notify();
@@ -483,11 +508,9 @@ mod tests {
     impl<const PANIC: bool> EventRecorder for MockFileFormat<PANIC> {
         type Directive = DefaultDirective;
 
-        type Schema = DefaultSchema;
+        type Record = Vec<u8>;
 
-        type Export = Vec<u8>;
-
-        fn record(_event: &Event, _schema: &mut Self::Schema) -> Self::Export {
+        fn record(_event: &Event) -> Self::Record {
             vec![1_u8] // Single byte
         }
     }
