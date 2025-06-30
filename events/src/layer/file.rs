@@ -18,39 +18,12 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
 use autonomic_core::sync::Signal;
-use autonomic_core::thread_local_instance;
 use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
+use crate::record::{DefaultDirective, DefaultEventSchema, DefaultEventVisitor, level_to_byte};
 use crate::trace_error;
 use crate::traits::{EventRecorder, EventWriter, FileStoreFormat};
-
-#[derive(Default)]
-pub struct DefaultStoreSchema {
-    pub source: String,
-    pub message: String,
-}
-
-impl DefaultStoreSchema {
-    #[inline]
-    pub fn clear(&mut self) {
-        self.source.clear();
-        self.message.clear();
-    }
-}
-
-thread_local_instance!(__DEFAULT_STORE_SCHEMA, DefaultStoreSchema);
-
-impl ThreadLocalInstance for DefaultStoreSchema {
-    #[inline]
-    fn thread_local<F, I>(f: F) -> I
-    where
-        F: FnOnce(&mut Self) -> I,
-    {
-        __DEFAULT_STORE_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
-    }
-}
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
 async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
@@ -83,7 +56,7 @@ impl EventRecorder for CSVFormat {
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
         // TODO: Further reduce memory usage and allocations.
-        DefaultStoreSchema::thread_local(|schema| {
+        DefaultEventSchema::thread_local(|schema| {
             schema.clear();
 
             let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);
@@ -134,7 +107,7 @@ impl EventRecorder for JSONLFormat {
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
         // TODO: Further reduce memory usage and allocations.
-        DefaultStoreSchema::thread_local(|schema| {
+        DefaultEventSchema::thread_local(|schema| {
             schema.clear();
 
             let mut visitor = DefaultEventVisitor::new(&mut schema.source, &mut schema.message);

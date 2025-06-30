@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
@@ -12,7 +11,38 @@ use tracing::field::Field;
 use tracing_core::Metadata;
 use tracing_core::field::Visit;
 
+use chrono::{DateTime, Utc};
+
+use autonomic_core::thread_local_instance;
+use autonomic_core::traits::ThreadLocalInstance;
+
 use crate::traits::{EventRecorder, RecorderDirective};
+
+#[derive(Default)]
+pub struct DefaultEventSchema {
+    pub source: String,
+    pub message: String,
+}
+
+impl DefaultEventSchema {
+    #[inline]
+    pub fn clear(&mut self) {
+        self.source.clear();
+        self.message.clear();
+    }
+}
+
+thread_local_instance!(__TLS_DEFAULT_EVENT_SCHEMA, DefaultEventSchema);
+
+impl ThreadLocalInstance for DefaultEventSchema {
+    #[inline]
+    fn thread_local<F, I>(f: F) -> I
+    where
+        F: FnOnce(&mut Self) -> I,
+    {
+        __TLS_DEFAULT_EVENT_SCHEMA.with(|cell| f(&mut cell.borrow_mut()))
+    }
+}
 
 /// Converts `Level` to byte representation.
 #[inline]
