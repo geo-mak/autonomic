@@ -57,7 +57,7 @@ pub trait EventRecorder {
 /// Each implementation should focus on one way of writing to files.
 pub trait EventWriter {
     /// The context provided by the supervisory body. It can simply be `self`.
-    type Context;
+    type WriteContext;
 
     /// The buffer type the writer can process.
     type WriteBuffer;
@@ -67,7 +67,7 @@ pub trait EventWriter {
     /// Writes the buffer to the file at the specified path.
     /// Returns a future that resolves to the result of the write operation.
     fn write(
-        ctx: &Self::Context,
+        ctx: &Self::WriteContext,
         buffer: &Self::WriteBuffer,
     ) -> impl Future<Output = Self::WriteResult> + Send;
 }
