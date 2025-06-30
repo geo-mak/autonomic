@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
@@ -28,7 +27,7 @@ const DEFAULT_EVENT_PUBLISHED: &str = "DEP";
 /// > - Subscriber that has not yet received the dropped event will receive the error `RecvError::Lagged`.
 /// > - The lagged subscribers will receive again from the oldest event remained in channel's buffer.
 /// > - When the channel is dropped, subscribers will receive the error `RecvError::Closed`.
-pub type EventChannel<T> = Arc<broadcast::Sender<T>>;
+pub type EventChannel<T> = broadcast::Sender<T>;
 
 /// Publisher directive enables recording default events marked as published.
 pub struct PublisherDirective;
@@ -60,7 +59,7 @@ where
         let (tx, _) = broadcast::channel::<R::Record>(buffer.max(16));
         Self {
             _subscriber: PhantomData,
-            channel: Arc::new(tx),
+            channel: tx,
         }
     }
 }
@@ -83,8 +82,7 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let record = R::record(event);
-        let _ = self.channel.send(record);
+        let _ = self.channel.send(R::record(event));
     }
 }
 
