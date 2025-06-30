@@ -17,11 +17,13 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
 use autonomic_core::sync::Signal;
+use autonomic_core::thread_local_instance;
+use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{DefaultDirective, DefaultEventVisitor, level_to_byte};
-use crate::traits::{EventRecorder, EventWriter, FileStoreFormat, ThreadLocalInstance};
-use crate::{thread_local_instance, trace_error};
+use crate::trace_error;
+use crate::traits::{EventRecorder, EventWriter, FileStoreFormat};
 
 #[derive(Default)]
 pub struct DefaultStoreSchema {
