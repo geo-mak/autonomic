@@ -24,7 +24,7 @@ use autonomic_core::traits::ThreadLocalInstance;
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{CSVVisitor, DefaultDirective, JSONLVisitor, level_to_byte};
 use crate::trace_error;
-use crate::traits::{EventRecorder, EventWriter};
+use crate::traits::{EventRecorder, EventWriter, RecorderDirective};
 
 #[derive(Default)]
 pub struct BytesBufferCache {
@@ -59,10 +59,18 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
 
 /// File format for recording and writing events in CSV format.
 /// The output file has table-like structure with a header row.
-pub struct CSVFormat;
+///
+/// By default, it uses `DefaultDirective` for event filtering, but users can implement
+/// and specify their own directive type to customize which events are recorded.
+pub struct CSVFormat<T = DefaultDirective>(PhantomData<T>)
+where
+    T: RecorderDirective;
 
-impl EventRecorder for CSVFormat {
-    type Directive = DefaultDirective;
+impl<T> EventRecorder for CSVFormat<T>
+where
+    T: RecorderDirective,
+{
+    type Directive = T;
 
     type Record = Vec<u8>;
 
@@ -110,10 +118,18 @@ impl EventWriter for CSVFormat {
 }
 
 /// File format for recording and writing events as JSON objects.
-pub struct JSONLFormat;
+///
+/// By default, it uses `DefaultDirective` for event filtering, but users can implement
+/// and specify their own directive type to customize which events are recorded.
+pub struct JSONLFormat<T = DefaultDirective>(PhantomData<T>)
+where
+    T: RecorderDirective;
 
-impl EventRecorder for JSONLFormat {
-    type Directive = DefaultDirective;
+impl<T> EventRecorder for JSONLFormat<T>
+where
+    T: RecorderDirective,
+{
+    type Directive = T;
 
     type Record = Vec<u8>;
 
