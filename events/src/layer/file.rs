@@ -1,4 +1,6 @@
+use core::fmt::Debug;
 use core::str;
+use std::error::Error;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -6,13 +8,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use autonomic_core::thread_local_instance;
 use chrono::Utc;
 
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
+use tracing::field::Visit;
 use tracing::{Event, Subscriber};
 
+use tracing_core::Field;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
@@ -21,9 +26,26 @@ use autonomic_core::sync::Signal;
 use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultEventCache, DefaultEventVisitor, level_to_byte};
+use crate::record::{DefaultDirective, level_to_byte};
 use crate::trace_error;
 use crate::traits::{EventRecorder, EventWriter};
+
+#[derive(Default)]
+pub struct BytesBufferCache {
+    pub buffer: Vec<u8>,
+}
+
+thread_local_instance!(__TLS_BYTES_BUFFER_CACHE, BytesBufferCache);
+
+impl ThreadLocalInstance for BytesBufferCache {
+    #[inline]
+    fn thread_local<F, I>(f: F) -> I
+    where
+        F: FnOnce(&mut Self) -> I,
+    {
+        __TLS_BYTES_BUFFER_CACHE.with(|cell| f(&mut cell.borrow_mut()))
+    }
+}
 
 /// Writes a bytes buffer to the specified file by appending all bytes.
 async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Result<()> {
@@ -37,6 +59,31 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
     file.flush().await?;
 
     Ok(())
+}
+
+pub struct CSVVisitor<'a, T: std::io::Write> {
+    buffer: &'a mut T,
+}
+
+impl<'a, T: std::io::Write> CSVVisitor<'a, T> {
+    #[inline(always)]
+    pub fn new(buffer: &'a mut T) -> Self {
+        Self { buffer }
+    }
+}
+
+impl<'a, T: std::io::Write> Visit for CSVVisitor<'a, T> {
+    fn record_str(&mut self, _field: &Field, value: &str) {
+        let _ = write!(self.buffer, "\"{value}\",");
+    }
+
+    fn record_error(&mut self, _field: &Field, value: &(dyn Error + 'static)) {
+        let _ = write!(self.buffer, "\"{value}\",");
+    }
+
+    fn record_debug(&mut self, _field: &Field, value: &dyn Debug) {
+        let _ = write!(self.buffer, "\"{value:?}\",");
+    }
 }
 
 /// File format for recording and writing events in CSV format.
@@ -53,28 +100,29 @@ impl EventRecorder for CSVFormat {
     /// # Returns
     /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
-        // TODO: Further reduce memory usage and allocations.
-        DefaultEventCache::thread_local(|cache| {
-            cache.clear();
+        BytesBufferCache::thread_local(|cache| {
+            cache.buffer.clear();
 
-            let mut visitor = DefaultEventVisitor::new(&mut cache.source, &mut cache.message);
+            write!(
+                cache.buffer,
+                "{},",
+                level_to_byte(*event.metadata().level())
+            )
+            .unwrap();
+
+            let mut visitor = CSVVisitor::<Vec<u8>>::new(&mut cache.buffer);
 
             event.record(&mut visitor);
 
-            let mut record: Vec<u8> = Vec::new();
-
-            // TODO: Should events with no source or message remain allowed?
             let _ = writeln!(
-                record,
-                "{},\"{}\",\"{}\",\"{}\",{}\n",
-                level_to_byte(*event.metadata().level()),
-                &cache.source,
-                &cache.message,
+                cache.buffer,
+                ",\"{}\",\"{}\"\n",
                 event.metadata().target(),
-                Utc::now().to_rfc3339(),
+                Utc::now().to_rfc3339()
             );
 
-            record
+            // TODO: Don't clone.
+            cache.buffer.clone()
         })
     }
 }
@@ -87,6 +135,31 @@ impl EventWriter for CSVFormat {
     /// Writes the buffer to the file in CSV format **without** header.
     async fn write(ctx: &Self::WriteContext, buffer: &Self::WriteBuffer) -> Self::WriteResult {
         write_bytes_buffer(ctx, buffer).await
+    }
+}
+
+pub struct JSONLVisitor<'a, T: std::io::Write> {
+    buffer: &'a mut T,
+}
+
+impl<'a, T: std::io::Write> JSONLVisitor<'a, T> {
+    #[inline(always)]
+    pub fn new(buffer: &'a mut T) -> Self {
+        Self { buffer }
+    }
+}
+
+impl<'a, T: std::io::Write> Visit for JSONLVisitor<'a, T> {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        let _ = write!(self.buffer, "\"{}\":\"{}\",", field.name(), value);
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
+        let _ = write!(self.buffer, "\"{}\":\"{}\",", field.name(), value);
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+        let _ = write!(self.buffer, "\"{}\":\"{value:?}\",", field.name());
     }
 }
 
@@ -103,28 +176,27 @@ impl EventRecorder for JSONLFormat {
     /// # Returns
     /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
     fn record(event: &Event) -> Self::Record {
-        // TODO: Further reduce memory usage and allocations.
-        DefaultEventCache::thread_local(|cache| {
-            cache.clear();
+        BytesBufferCache::thread_local(|cache| {
+            cache.buffer.clear();
 
-            let mut visitor = DefaultEventVisitor::new(&mut cache.source, &mut cache.message);
-
-            event.record(&mut visitor);
-
-            let mut record: Vec<u8> = Vec::new();
-
-            // TODO: Should events with no source or message remain allowed?
-            let _ = writeln!(
-                record,
-                "{{\"level\":{},\"source\":\"{}\",\"message\":\"{}\",\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
-                level_to_byte(*event.metadata().level()),
-                &cache.source,
-                &cache.message,
-                event.metadata().target(),
-                Utc::now().to_rfc3339(),
+            let _ = write!(
+                cache.buffer,
+                "{{\"level\":{},",
+                level_to_byte(*event.metadata().level())
             );
 
-            record
+            let mut visitor = JSONLVisitor::<Vec<u8>>::new(&mut cache.buffer);
+            event.record(&mut visitor);
+
+            let _ = writeln!(
+                cache.buffer,
+                "\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
+                event.metadata().target(),
+                Utc::now().to_rfc3339()
+            );
+
+            // TODO: Don't clone.
+            cache.buffer.clone()
         })
     }
 }

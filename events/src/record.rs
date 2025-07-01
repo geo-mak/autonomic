@@ -18,23 +18,9 @@ use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::traits::{EventRecorder, RecorderDirective};
 
-#[derive(Default)]
-pub struct DefaultEventCache {
-    pub source: String,
-    pub message: String,
-}
+thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEvent);
 
-impl DefaultEventCache {
-    #[inline]
-    pub fn clear(&mut self) {
-        self.source.clear();
-        self.message.clear();
-    }
-}
-
-thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEventCache);
-
-impl ThreadLocalInstance for DefaultEventCache {
+impl ThreadLocalInstance for DefaultEvent {
     #[inline]
     fn thread_local<F, I>(f: F) -> I
     where
@@ -148,12 +134,12 @@ impl Default for DefaultEvent {
 /// # Recording Fields
 /// - `source`: As str or debug only.
 /// - `message`: As str, debug or error.
-pub struct DefaultEventVisitor<'a> {
+pub struct DefaultRecorderVisitor<'a> {
     source: &'a mut String,
     message: &'a mut String,
 }
 
-impl<'a> DefaultEventVisitor<'a> {
+impl<'a> DefaultRecorderVisitor<'a> {
     #[inline(always)]
     pub const fn new(source: &'a mut String, message: &'a mut String) -> Self {
         Self { source, message }
@@ -161,7 +147,7 @@ impl<'a> DefaultEventVisitor<'a> {
 }
 
 // > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
-impl<'a> Visit for DefaultEventVisitor<'a> {
+impl<'a> Visit for DefaultRecorderVisitor<'a> {
     fn record_str(&mut self, field: &Field, value: &str) {
         let len = value.len();
 
@@ -261,7 +247,7 @@ where
     fn record(event: &Event) -> Self::Record {
         let mut record = Self::Record::default();
 
-        let mut visitor = DefaultEventVisitor::new(&mut record.source, &mut record.message);
+        let mut visitor = DefaultRecorderVisitor::new(&mut record.source, &mut record.message);
 
         event.record(&mut visitor);
 
