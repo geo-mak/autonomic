@@ -1,6 +1,4 @@
-use core::fmt::Debug;
 use core::str;
-use std::error::Error;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -14,10 +12,8 @@ use chrono::Utc;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
-use tracing::field::Visit;
 use tracing::{Event, Subscriber};
 
-use tracing_core::Field;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
@@ -26,7 +22,7 @@ use autonomic_core::sync::Signal;
 use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, level_to_byte};
+use crate::record::{CSVVisitor, DefaultDirective, JSONLVisitor, level_to_byte};
 use crate::trace_error;
 use crate::traits::{EventRecorder, EventWriter};
 
@@ -59,31 +55,6 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
     file.flush().await?;
 
     Ok(())
-}
-
-pub struct CSVVisitor<'a, T: std::io::Write> {
-    buffer: &'a mut T,
-}
-
-impl<'a, T: std::io::Write> CSVVisitor<'a, T> {
-    #[inline(always)]
-    pub fn new(buffer: &'a mut T) -> Self {
-        Self { buffer }
-    }
-}
-
-impl<'a, T: std::io::Write> Visit for CSVVisitor<'a, T> {
-    fn record_str(&mut self, _field: &Field, value: &str) {
-        let _ = write!(self.buffer, "\"{value}\",");
-    }
-
-    fn record_error(&mut self, _field: &Field, value: &(dyn Error + 'static)) {
-        let _ = write!(self.buffer, "\"{value}\",");
-    }
-
-    fn record_debug(&mut self, _field: &Field, value: &dyn Debug) {
-        let _ = write!(self.buffer, "\"{value:?}\",");
-    }
 }
 
 /// File format for recording and writing events in CSV format.
@@ -135,31 +106,6 @@ impl EventWriter for CSVFormat {
     /// Writes the buffer to the file in CSV format **without** header.
     async fn write(ctx: &Self::WriteContext, buffer: &Self::WriteBuffer) -> Self::WriteResult {
         write_bytes_buffer(ctx, buffer).await
-    }
-}
-
-pub struct JSONLVisitor<'a, T: std::io::Write> {
-    buffer: &'a mut T,
-}
-
-impl<'a, T: std::io::Write> JSONLVisitor<'a, T> {
-    #[inline(always)]
-    pub fn new(buffer: &'a mut T) -> Self {
-        Self { buffer }
-    }
-}
-
-impl<'a, T: std::io::Write> Visit for JSONLVisitor<'a, T> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        let _ = write!(self.buffer, "\"{}\":\"{}\",", field.name(), value);
-    }
-
-    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        let _ = write!(self.buffer, "\"{}\":\"{}\",", field.name(), value);
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-        let _ = write!(self.buffer, "\"{}\":\"{value:?}\",", field.name());
     }
 }
 

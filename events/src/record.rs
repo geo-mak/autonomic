@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
@@ -18,15 +19,179 @@ use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::traits::{EventRecorder, RecorderDirective};
 
-thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEvent);
+pub struct JSONLVisitor<'a, T: std::io::Write> {
+    buffer: &'a mut T,
+}
 
-impl ThreadLocalInstance for DefaultEvent {
-    #[inline]
-    fn thread_local<F, I>(f: F) -> I
-    where
-        F: FnOnce(&mut Self) -> I,
-    {
-        __TLS_DEFAULT_EVENT_CACHE.with(|cell| f(&mut cell.borrow_mut()))
+impl<'a, T: std::io::Write> JSONLVisitor<'a, T> {
+    #[inline(always)]
+    pub fn new(buffer: &'a mut T) -> Self {
+        Self { buffer }
+    }
+}
+
+impl<'a, T: std::io::Write> Visit for JSONLVisitor<'a, T> {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        let _ = write!(self.buffer, "\"{}\":\"{value}\",", field.name());
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
+        let _ = write!(self.buffer, "\"{}\":\"{value}\",", field.name());
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+        let _ = write!(self.buffer, "\"{}\":\"{value:?}\",", field.name());
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        let _ = write!(self.buffer, "\"{}\":{value},", field.name());
+    }
+
+    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
+        let _ = write!(self.buffer, "\"{}\":\"{value:02x?}\",", field.name());
+    }
+}
+
+pub struct CSVVisitor<'a, T: std::io::Write> {
+    buffer: &'a mut T,
+}
+
+impl<'a, T: std::io::Write> CSVVisitor<'a, T> {
+    #[inline(always)]
+    pub fn new(buffer: &'a mut T) -> Self {
+        Self { buffer }
+    }
+}
+
+impl<'a, T: std::io::Write> Visit for CSVVisitor<'a, T> {
+    fn record_str(&mut self, _field: &Field, value: &str) {
+        let _ = write!(self.buffer, "\"{value}\",");
+    }
+
+    fn record_error(&mut self, _field: &Field, value: &(dyn Error + 'static)) {
+        let _ = write!(self.buffer, "\"{value}\",");
+    }
+
+    fn record_debug(&mut self, _field: &Field, value: &dyn Debug) {
+        let _ = write!(self.buffer, "\"{value:?}\",");
+    }
+    fn record_f64(&mut self, _field: &Field, value: f64) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_i64(&mut self, _field: &Field, value: i64) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_u64(&mut self, _field: &Field, value: u64) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_i128(&mut self, _field: &Field, value: i128) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_u128(&mut self, _field: &Field, value: u128) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_bool(&mut self, _field: &Field, value: bool) {
+        let _ = write!(self.buffer, "{value},");
+    }
+
+    fn record_bytes(&mut self, _field: &Field, value: &[u8]) {
+        let _ = write!(self.buffer, "\"{value:02x?}\",");
+    }
+}
+
+/// A visitor struct that holds mutable references to a source and message string.
+///
+/// # Recording Fields
+/// - `source`: As str or debug only.
+/// - `message`: As str, debug or error.
+pub struct DefaultRecorderVisitor<'a> {
+    source: &'a mut String,
+    message: &'a mut String,
+}
+
+impl<'a> DefaultRecorderVisitor<'a> {
+    #[inline(always)]
+    pub const fn new(source: &'a mut String, message: &'a mut String) -> Self {
+        Self { source, message }
+    }
+}
+
+// > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
+impl<'a> Visit for DefaultRecorderVisitor<'a> {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        let len = value.len();
+
+        // Empty values are skipped
+        if len == 0 {
+            return;
+        }
+
+        // Remove quotes if present, which is common when using `format!` macro with debug {:?}
+        let val = if len >= 2 {
+            let bytes = value.as_bytes();
+            if bytes[0] == b'"' && bytes[len - 1] == b'"' {
+                let trimmed = &value[1..len - 1];
+                // Empty values are skipped
+                if trimmed.is_empty() {
+                    return;
+                }
+                trimmed
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+
+        match field.name() {
+            "source" => {
+                self.source.push_str(val);
+            }
+            "message" => {
+                self.message.push_str(val);
+            }
+            _ => {}
+        }
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
+        // Only message is allowed to be recorded as error
+        if field.name() == "message" {
+            *self.message = value.to_string();
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        match field.name() {
+            "source" => *self.source = format!("{value:?}"),
+            "message" => *self.message = format!("{value:?}"),
+            _ => {}
+        }
     }
 }
 
@@ -129,74 +294,15 @@ impl Default for DefaultEvent {
     }
 }
 
-/// A visitor struct that holds mutable references to a source and message string.
-///
-/// # Recording Fields
-/// - `source`: As str or debug only.
-/// - `message`: As str, debug or error.
-pub struct DefaultRecorderVisitor<'a> {
-    source: &'a mut String,
-    message: &'a mut String,
-}
+thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEvent);
 
-impl<'a> DefaultRecorderVisitor<'a> {
-    #[inline(always)]
-    pub const fn new(source: &'a mut String, message: &'a mut String) -> Self {
-        Self { source, message }
-    }
-}
-
-// > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
-impl<'a> Visit for DefaultRecorderVisitor<'a> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        let len = value.len();
-
-        // Empty values are skipped
-        if len == 0 {
-            return;
-        }
-
-        // Remove quotes if present, which is common when using `format!` macro with debug {:?}
-        let val = if len >= 2 {
-            let bytes = value.as_bytes();
-            if bytes[0] == b'"' && bytes[len - 1] == b'"' {
-                let trimmed = &value[1..len - 1];
-                // Empty values are skipped
-                if trimmed.is_empty() {
-                    return;
-                }
-                trimmed
-            } else {
-                value
-            }
-        } else {
-            value
-        };
-
-        match field.name() {
-            "source" => {
-                self.source.push_str(val);
-            }
-            "message" => {
-                self.message.push_str(val);
-            }
-            _ => {}
-        }
-    }
-
-    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        // Only message is allowed to be recorded as error
-        if field.name() == "message" {
-            *self.message = value.to_string();
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        match field.name() {
-            "source" => *self.source = format!("{value:?}"),
-            "message" => *self.message = format!("{value:?}"),
-            _ => {}
-        }
+impl ThreadLocalInstance for DefaultEvent {
+    #[inline]
+    fn thread_local<F, I>(f: F) -> I
+    where
+        F: FnOnce(&mut Self) -> I,
+    {
+        __TLS_DEFAULT_EVENT_CACHE.with(|cell| f(&mut cell.borrow_mut()))
     }
 }
 
