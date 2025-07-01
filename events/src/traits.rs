@@ -51,6 +51,31 @@ pub trait EventRecorder {
     fn record(event: &Event) -> Self::Record;
 }
 
+/// A trait for event recorders that support using a reusable cache buffer to record events.
+///
+/// This trait allows implementors to define a cache buffer type for storing event records temporarily,
+/// as well as a directive type to control whether recording is enabled for a given event.
+///
+/// # Associated Types
+///
+/// - `Directive`: A type implementing [`RecorderDirective`] used to determine if the recorder
+///   should record a particular event.
+/// - `RecordCache`: The type of the reusable buffer used during event recording.
+pub trait CachingEventRecorder {
+    /// The directive type used to determine if the recorder is enabled for a given event.
+    type Directive: RecorderDirective;
+
+    /// The reusable buffer type used for recording events.
+    type RecordCache;
+
+    /// Records the given event, using the provided reusable cache buffer.
+    ///
+    /// # Arguments
+    /// * `event` - The event to record.
+    /// * `cache` - The reusable buffer to use for recording.
+    fn record(event: &Event, cache: &mut Self::RecordCache);
+}
+
 /// Trait for implementing event writers.
 ///
 /// Options and complex configurations are strongly discouraged.

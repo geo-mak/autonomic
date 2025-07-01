@@ -24,7 +24,7 @@ use autonomic_core::traits::ThreadLocalInstance;
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{CSVVisitor, DefaultDirective, JSONLVisitor, level_to_byte};
 use crate::trace_error;
-use crate::traits::{EventRecorder, EventWriter, RecorderDirective};
+use crate::traits::{CachingEventRecorder, EventWriter, RecorderDirective};
 
 #[derive(Default)]
 pub struct BytesBufferCache {
@@ -58,49 +58,35 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
 }
 
 /// File format for recording and writing events in CSV format.
-/// 
+///
 /// By default, it uses `DefaultDirective` for event filtering, but users can implement
 /// and specify their own directive type to customize which events are recorded.
 pub struct CSVFormat<T = DefaultDirective>(PhantomData<T>)
 where
     T: RecorderDirective;
 
-impl<T> EventRecorder for CSVFormat<T>
+impl<T> CachingEventRecorder for CSVFormat<T>
 where
     T: RecorderDirective,
 {
     type Directive = T;
 
-    type Record = Vec<u8>;
+    type RecordCache = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to CSV record.
-    ///
-    /// # Returns
-    /// - `Vec<u8>`: CSV record as bytes-ready string buffer with a newline character.
-    fn record(event: &Event) -> Self::Record {
-        BytesBufferCache::thread_local(|cache| {
-            cache.buffer.clear();
+    fn record(event: &Event, record: &mut Self::RecordCache) {
+        let _ = write!(record, "{},", level_to_byte(*event.metadata().level()));
 
-            let _ = write!(
-                cache.buffer,
-                "{},",
-                level_to_byte(*event.metadata().level())
-            );
+        let mut visitor = CSVVisitor::<Vec<u8>>::new(record);
 
-            let mut visitor = CSVVisitor::<Vec<u8>>::new(&mut cache.buffer);
+        event.record(&mut visitor);
 
-            event.record(&mut visitor);
-
-            let _ = writeln!(
-                cache.buffer,
-                ",\"{}\",\"{}\"\n",
-                event.metadata().target(),
-                Utc::now().to_rfc3339()
-            );
-
-            // TODO: Don't clone.
-            cache.buffer.clone()
-        })
+        let _ = writeln!(
+            record,
+            ",\"{}\",\"{}\"\n",
+            event.metadata().target(),
+            Utc::now().to_rfc3339()
+        );
     }
 }
 
@@ -123,41 +109,32 @@ pub struct JSONLFormat<T = DefaultDirective>(PhantomData<T>)
 where
     T: RecorderDirective;
 
-impl<T> EventRecorder for JSONLFormat<T>
+impl<T> CachingEventRecorder for JSONLFormat<T>
 where
     T: RecorderDirective,
 {
     type Directive = T;
 
-    type Record = Vec<u8>;
+    type RecordCache = Vec<u8>;
 
     /// Records and transforms fields in the event and converts recorded fields to a JSON object.
-    ///
-    /// # Returns
-    /// - `Vec<u8>`: JSON object as bytes-ready string buffer with a newline character.
-    fn record(event: &Event) -> Self::Record {
-        BytesBufferCache::thread_local(|cache| {
-            cache.buffer.clear();
+    fn record(event: &Event, record: &mut Self::RecordCache) {
+        let _ = write!(
+            record,
+            "{{\"level\":{},",
+            level_to_byte(*event.metadata().level())
+        );
 
-            let _ = write!(
-                cache.buffer,
-                "{{\"level\":{},",
-                level_to_byte(*event.metadata().level())
-            );
+        let mut visitor = JSONLVisitor::<Vec<u8>>::new(record);
 
-            let mut visitor = JSONLVisitor::<Vec<u8>>::new(&mut cache.buffer);
-            event.record(&mut visitor);
+        event.record(&mut visitor);
 
-            let _ = writeln!(
-                cache.buffer,
-                "\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
-                event.metadata().target(),
-                Utc::now().to_rfc3339()
-            );
-
-            // TODO: Don't clone.
-            cache.buffer.clone()
-        })
+        let _ = writeln!(
+            record,
+            "\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
+            event.metadata().target(),
+            Utc::now().to_rfc3339()
+        );
     }
 }
 
@@ -323,10 +300,9 @@ impl<'a> Drop for OnExit<'a> {
 /// - `S`: The tracing subscriber that accepts `Filtered` types as layers.
 /// - `F`: The format type to record and write events.
 ///
-/// `F` is constrained with additional constraints:
-/// The `Output` of its recorder and the `WriteBuffer` of its writer must be `Vec<u8>`.
-/// This allows the same buffer to be used for both recording and writing, where writer can write
-/// the entire buffer with single write operation.
+/// Events are recorded into an allocated record cache, which is flushed after each event is recorded.
+/// The recording implementation should not be concerned with the state or clearing of the buffer,
+/// as this is handled by the store logic.
 ///
 /// This store is fused with `CallSiteFilter` to filter events in this layer per call-site using
 /// the directive of its recorder before recording.
@@ -338,7 +314,7 @@ impl<'a> Drop for OnExit<'a> {
 pub struct EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: EventRecorder + EventWriter,
+    F: CachingEventRecorder + EventWriter,
 {
     state: Arc<SharedState<F::WriteBuffer>>,
     _s: PhantomData<S>,
@@ -348,7 +324,7 @@ where
 impl<S, F> EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: EventRecorder<Record = Vec<u8>>
+    F: CachingEventRecorder<RecordCache = Vec<u8>>
         + EventWriter<
             WriteContext = FileContext,
             WriteBuffer = Vec<u8>,
@@ -467,7 +443,7 @@ where
 impl<S, F> Layer<S> for EventsFileStore<S, F>
 where
     S: Subscriber,
-    F: EventRecorder<Record = Vec<u8>> + EventWriter<WriteBuffer = Vec<u8>> + 'static,
+    F: CachingEventRecorder<RecordCache = Vec<u8>> + EventWriter<WriteBuffer = Vec<u8>> + 'static,
 {
     // > Note: Disabling event per call-site for this layer is done by the filter.
     // > It can't be done in layer using method `register_callsite`, because it will disable it
@@ -481,18 +457,20 @@ where
 
     #[inline]
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
-        let mut record = F::record(event);
+        BytesBufferCache::thread_local(|record| {
+            F::record(event, &mut record.buffer);
+            if let Ok(mut protected_buffer) = self.state.buffer.lock() {
+                let buffer = protected_buffer.current_mut();
 
-        if let Ok(mut protected_buffer) = self.state.buffer.lock() {
-            let buffer = protected_buffer.current_mut();
+                // Bitwise non-overlapping copy.
+                // `record.buffer` is cleared by `append`.
+                buffer.append(&mut record.buffer);
 
-            buffer.append(&mut record);
-            // Bitwise non-overlapping copy.
-
-            if buffer.len() >= self.state.limit {
-                self.state.sig_write.notify();
+                if buffer.len() >= self.state.limit {
+                    self.state.sig_write.notify();
+                }
             }
-        }
+        });
     }
 }
 
@@ -533,13 +511,13 @@ mod tests {
         }
     }
 
-    impl<const PANIC: bool> EventRecorder for MockFileFormat<PANIC> {
+    impl<const PANIC: bool> CachingEventRecorder for MockFileFormat<PANIC> {
         type Directive = DefaultDirective;
 
-        type Record = Vec<u8>;
+        type RecordCache = Vec<u8>;
 
-        fn record(_event: &Event) -> Self::Record {
-            vec![1_u8] // Single byte
+        fn record(_event: &Event, record: &mut Self::RecordCache) {
+            record.push(1_u8);
         }
     }
 
