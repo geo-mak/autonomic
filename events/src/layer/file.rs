@@ -58,8 +58,7 @@ async fn write_bytes_buffer(ctx: &FileContext, buffer: &[u8]) -> tokio::io::Resu
 }
 
 /// File format for recording and writing events in CSV format.
-/// The output file has table-like structure with a header row.
-///
+/// 
 /// By default, it uses `DefaultDirective` for event filtering, but users can implement
 /// and specify their own directive type to customize which events are recorded.
 pub struct CSVFormat<T = DefaultDirective>(PhantomData<T>)
@@ -82,12 +81,11 @@ where
         BytesBufferCache::thread_local(|cache| {
             cache.buffer.clear();
 
-            write!(
+            let _ = write!(
                 cache.buffer,
                 "{},",
                 level_to_byte(*event.metadata().level())
-            )
-            .unwrap();
+            );
 
             let mut visitor = CSVVisitor::<Vec<u8>>::new(&mut cache.buffer);
 
