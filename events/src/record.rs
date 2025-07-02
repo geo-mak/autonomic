@@ -19,6 +19,12 @@ use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::traits::{EventRecorder, RecorderDirective};
 
+/// A visitor that serializes records as JSON Lines (JSONL) into the provided buffer.
+///
+/// This struct writes each record as a single JSON object per line, following the JSONL format.
+/// It does not enforce any schema on the data being written; the structure and validity of each
+/// record is determined by the caller. As a result, the responsibility for correct reading and
+/// interpretation of the output is left to the parsers that consume the JSONL data.
 pub struct JSONLVisitor<'a, T: std::io::Write> {
     buffer: &'a mut T,
 }
@@ -72,6 +78,12 @@ impl<'a, T: std::io::Write> Visit for JSONLVisitor<'a, T> {
     }
 }
 
+/// A visitor that serializes records as CSV into the provided buffer.
+///
+/// This struct writes each record as a comma-separated line, following the CSV format.
+/// No schema is enforced on the data being written; the structure and validity of each
+/// record is determined by the caller. As a result, the responsibility for correct reading
+/// and interpretation of the output is left to the parsers that consume the CSV data.
 pub struct CSVVisitor<'a, T: std::io::Write> {
     buffer: &'a mut T,
 }
