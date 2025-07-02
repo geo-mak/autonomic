@@ -19,7 +19,6 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
 use autonomic_core::sync::Signal;
-use autonomic_core::traits::ThreadLocalInstance;
 
 use crate::layer::filter::CallSiteFilter;
 use crate::record::{CSVVisitor, DefaultDirective, JSONLVisitor, level_to_byte};
@@ -27,13 +26,13 @@ use crate::trace_error;
 use crate::traits::{CachingEventRecorder, EventWriter, RecorderDirective};
 
 #[derive(Default)]
-pub struct BytesBufferCache {
+struct BytesBufferCache {
     pub buffer: Vec<u8>,
 }
 
 thread_local_instance!(__TLS_BYTES_BUFFER_CACHE, BytesBufferCache);
 
-impl ThreadLocalInstance for BytesBufferCache {
+impl BytesBufferCache {
     #[inline]
     fn thread_local<F, I>(f: F) -> I
     where
@@ -81,9 +80,9 @@ where
 
         event.record(&mut visitor);
 
-        let _ = writeln!(
+        let _ = write!(
             record,
-            ",\"{}\",\"{}\"\n",
+            "\"{}\",\"{}\"\n",
             event.metadata().target(),
             Utc::now().to_rfc3339()
         );
@@ -132,7 +131,7 @@ where
 
         event.record(&mut visitor);
 
-        let _ = writeln!(
+        let _ = write!(
             record,
             "\"target\":\"{}\",\"timestamp\":\"{}\"}}\n",
             event.metadata().target(),
@@ -789,6 +788,176 @@ mod tests {
         let current_buf = buffer_guard.current();
         assert!(current_buf.is_empty());
         assert_ne!(current_buf.capacity(), 0);
+
+        tokio::fs::remove_file(full_path)
+            .await
+            .expect("Failed to delete events file");
+    }
+
+    struct FilterFreeDirective;
+
+    impl RecorderDirective for FilterFreeDirective {
+        fn enabled(_meta: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_events_io_schemaless_records_csv() {
+        let store = EventsFileStore::<Registry, CSVFormat<FilterFreeDirective>>::new(
+            Duration::from_secs(60),
+            229,
+            PathBuf::from(""),
+            "schemaless_events",
+            "csv",
+        );
+
+        let subscriber = Registry::default().with(store);
+
+        let _guard = subscriber::set_default(subscriber);
+
+        trace_info!(source = "schema_event", message = "happy info message");
+
+        // Schemaless.
+        tracing::info!(
+            source = "schemaless_event 1",
+            message = "info message",
+            extra_field = "some extra data",
+        );
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let full_path = format!("{}/schemaless_events.csv", cargo_manifest_dir);
+
+        let mut reader = ReaderBuilder::new()
+            .has_headers(false)
+            .flexible(true) // <- Read heterogeneous lines.
+            .from_path(&full_path)
+            .expect("Failed to open CSV file");
+
+        let records = reader.records().map(|r| r.unwrap()).collect::<Vec<_>>();
+
+        assert_eq!(
+            records.len(),
+            2,
+            "Expected 2 entries in the events file, but found {}",
+            records.len()
+        );
+
+        let mut normal_found = false;
+        let mut schemaless_found = false;
+
+        for record in records {
+            let level = record.get(0).unwrap().trim();
+            let source = record.get(1).unwrap().trim();
+            let message = record.get(2).unwrap().trim();
+
+            if level == "2" && source == "schema_event" && message == "happy info message" {
+                normal_found = true;
+            }
+
+            if level == "2" && source == "schemaless_event 1" && message == "info message" {
+                let extra_field = record.get(3).map(|s| s.trim()).unwrap_or("");
+                assert_eq!(
+                    extra_field, "some extra data",
+                    "Extra field not recorded correctly"
+                );
+                schemaless_found = true;
+            }
+        }
+
+        assert!(normal_found, "INFO entry not found or schema mismatch");
+        assert!(schemaless_found, "INFO entry with extra field not found");
+
+        tokio::fs::remove_file(full_path)
+            .await
+            .expect("Failed to delete events file");
+    }
+
+    #[tokio::test]
+    async fn test_events_io_schemaless_records_json() {
+        let store = EventsFileStore::<Registry, JSONLFormat<FilterFreeDirective>>::new(
+            Duration::from_secs(60),
+            243,
+            PathBuf::from(""),
+            "schemaless_events",
+            "jsonl",
+        );
+
+        let subscriber = Registry::default().with(store);
+
+        let _guard = subscriber::set_default(subscriber);
+
+        trace_info!(source = "schema_event", message = "happy info message");
+
+        // Schemaless.
+        tracing::info!(
+            source = "schemaless_event 1",
+            message = "info message",
+            extra_field = "some extra data"
+        );
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let full_path = format!("{}/schemaless_events.jsonl", cargo_manifest_dir);
+
+        let file_content = tokio::fs::read_to_string(&full_path)
+            .await
+            .expect("Failed to read JSON Lines file");
+
+        let json_objects: Vec<Value> = file_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("Failed to parse JSON line"))
+            .collect();
+
+        assert_eq!(
+            json_objects.len(),
+            2,
+            "Expected 2 entries in the events file, but found {}",
+            json_objects.len()
+        );
+
+        let mut normal_found = false;
+        let mut schemaless_found = false;
+
+        for entry in json_objects.iter() {
+            let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
+            let source = entry
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            let message = entry
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+
+            if level == 2 && source == "schema_event" && message == "happy info message" {
+                normal_found = true;
+            }
+
+            if level == 2 && source == "schemaless_event 1" && message == "info message" {
+                let extra_field = entry
+                    .get("extra_field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                assert_eq!(
+                    extra_field, "some extra data",
+                    "Extra field not recorded correctly in JSON"
+                );
+
+                schemaless_found = true;
+            }
+        }
+
+        assert!(normal_found, "INFO entry not found or schema mismatch");
+        assert!(schemaless_found, "INFO entry with extra field not found");
 
         tokio::fs::remove_file(full_path)
             .await

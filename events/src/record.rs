@@ -14,9 +14,6 @@ use tracing_core::field::Visit;
 
 use chrono::{DateTime, Utc};
 
-use autonomic_core::thread_local_instance;
-use autonomic_core::traits::ThreadLocalInstance;
-
 use crate::traits::{EventRecorder, RecorderDirective};
 
 /// A visitor that serializes records as JSON Lines (JSONL) into the provided buffer.
@@ -303,18 +300,6 @@ impl Default for DefaultEvent {
             target: String::new(),
             timestamp: Utc::now(),
         }
-    }
-}
-
-thread_local_instance!(__TLS_DEFAULT_EVENT_CACHE, DefaultEvent);
-
-impl ThreadLocalInstance for DefaultEvent {
-    #[inline]
-    fn thread_local<F, I>(f: F) -> I
-    where
-        F: FnOnce(&mut Self) -> I,
-    {
-        __TLS_DEFAULT_EVENT_CACHE.with(|cell| f(&mut cell.borrow_mut()))
     }
 }
 
