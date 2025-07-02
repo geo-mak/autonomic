@@ -90,7 +90,10 @@ where
     }
 }
 
-impl EventWriter for CSVFormat {
+impl<T> EventWriter for CSVFormat<T>
+where
+    T: RecorderDirective,
+{
     type WriteContext = FileContext;
     type WriteBuffer = Vec<u8>;
     type WriteResult = tokio::io::Result<()>;
@@ -138,7 +141,10 @@ where
     }
 }
 
-impl EventWriter for JSONLFormat {
+impl<T> EventWriter for JSONLFormat<T>
+where
+    T: RecorderDirective,
+{
     type WriteContext = FileContext;
     type WriteBuffer = Vec<u8>;
     type WriteResult = tokio::io::Result<()>;
