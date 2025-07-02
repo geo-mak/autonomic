@@ -27,7 +27,7 @@ use crate::traits::{CachingEventRecorder, EventWriter, RecorderDirective};
 
 #[derive(Default)]
 struct BytesBufferCache {
-    pub buffer: Vec<u8>,
+    buffer: Vec<u8>,
 }
 
 thread_local_instance!(__TLS_BYTES_BUFFER_CACHE, BytesBufferCache);
@@ -76,7 +76,7 @@ where
     fn record(event: &Event, record: &mut Self::RecordCache) {
         let _ = write!(record, "{},", level_to_byte(*event.metadata().level()));
 
-        let mut visitor = CSVVisitor::<Vec<u8>>::new(record);
+        let mut visitor = CSVVisitor::<Self::RecordCache>::new(record);
 
         event.record(&mut visitor);
 
@@ -127,7 +127,7 @@ where
             level_to_byte(*event.metadata().level())
         );
 
-        let mut visitor = JSONLVisitor::<Vec<u8>>::new(record);
+        let mut visitor = JSONLVisitor::<Self::RecordCache>::new(record);
 
         event.record(&mut visitor);
 
@@ -159,7 +159,7 @@ struct UnsafeRef<T> {
     ptr: *mut T,
 }
 
-unsafe impl<T: Send> Send for UnsafeRef<T> {}
+unsafe impl<T> Send for UnsafeRef<T> {}
 
 impl<T> std::ops::Deref for UnsafeRef<T> {
     type Target = T;

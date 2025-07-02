@@ -72,8 +72,8 @@ pub trait CachingEventRecorder {
     ///
     /// # Arguments
     /// * `event` - The event to record.
-    /// * `cache` - The reusable buffer to use for recording.
-    fn record(event: &Event, cache: &mut Self::RecordCache);
+    /// * `record` - The reusable buffer to use for recording.
+    fn record(event: &Event, record: &mut Self::RecordCache);
 }
 
 /// Trait for implementing event writers.
