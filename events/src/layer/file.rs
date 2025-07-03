@@ -76,6 +76,7 @@ where
     fn record(event: &Event, record: &mut Self::RecordCache) {
         let _ = write!(record, "{},", level_to_byte(*event.metadata().level()));
 
+        // TODO: Handle recording errors.
         let mut visitor = CSVVisitor::<Self::RecordCache>::new(record);
 
         event.record(&mut visitor);
@@ -127,6 +128,7 @@ where
             level_to_byte(*event.metadata().level())
         );
 
+        // TODO: Handle recording errors.
         let mut visitor = JSONLVisitor::<Self::RecordCache>::new(record);
 
         event.record(&mut visitor);

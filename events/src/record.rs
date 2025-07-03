@@ -35,6 +35,7 @@ impl<'a, T: std::io::Write> JSONLVisitor<'a, T> {
     }
 }
 
+// TODO: Handle errors.
 impl<'a, T: std::io::Write> Visit for JSONLVisitor<'a, T> {
     fn record_str(&mut self, field: &Field, value: &str) {
         let _ = write!(self.buffer, "\"{}\":\"{value}\",", field.name());
@@ -94,6 +95,7 @@ impl<'a, T: std::io::Write> CSVVisitor<'a, T> {
     }
 }
 
+// TODO: Handle errors.
 impl<'a, T: std::io::Write> Visit for CSVVisitor<'a, T> {
     fn record_str(&mut self, _field: &Field, value: &str) {
         let _ = write!(self.buffer, "\"{value}\",");
@@ -153,6 +155,7 @@ impl<'a> StringVisitor<'a> {
     }
 }
 
+// TODO: Handle errors.
 impl<'a> Visit for StringVisitor<'a> {
     fn record_str(&mut self, _field: &Field, value: &str) {
         let _ = write!(self.message, "{value}");
@@ -326,6 +329,7 @@ where
     fn record(event: &Event) -> Self::Record {
         let mut record = Self::Record::default();
 
+        // TODO: Handle recording errors.
         let mut visitor = StringVisitor::new(&mut record.message);
 
         event.record(&mut visitor);
