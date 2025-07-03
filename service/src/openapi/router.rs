@@ -87,8 +87,6 @@ async fn not_implemented() -> ServiceError {
 type StreamMapper = Map<WatchStream<OpState>, fn(OpState) -> Result<Event, Infallible>>;
 type EventsStream = Sse<StreamMapper>;
 
-const SERVICE_LABEL: &str = "OpenAPIService";
-
 struct OpenAPIEndpoints;
 
 impl ControllerService for OpenAPIEndpoints {
@@ -114,10 +112,7 @@ impl ControllerService for OpenAPIEndpoints {
         Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::ControllerReturn, Self::ServiceError> {
-        trace_trace!(
-            source = SERVICE_LABEL,
-            message = format!("Received HTTP request to get controller {}", id)
-        );
+        trace_trace!(message = format!("Received HTTP request to get controller {}", id));
         match manager.controller(id.as_str()) {
             Ok(op_info) => Ok(Json(op_info)),
             Err(err) => Err(ServiceError(err)),
@@ -132,10 +127,7 @@ impl ControllerService for OpenAPIEndpoints {
     async fn list(
         Extension(manager): Self::ServiceManager,
     ) -> Result<Self::ControllersReturn, Self::ServiceError> {
-        trace_trace!(
-            source = SERVICE_LABEL,
-            message = "Received HTTP request to list controllers"
-        );
+        trace_trace!(message = "Received HTTP request to list controllers");
         match manager.list() {
             Ok(op_infos) => Ok(Json(op_infos)),
             Err(err) => Err(ServiceError(err)),
@@ -151,7 +143,6 @@ impl ControllerService for OpenAPIEndpoints {
         Extension(manager): Self::ServiceManager,
     ) -> Result<Self::PerformingReturn, Self::ServiceError> {
         trace_trace!(
-            source = SERVICE_LABEL,
             message = "Received HTTP request to list controllers with performing operations"
         );
         match manager.list_performing() {
@@ -172,7 +163,6 @@ impl ControllerService for OpenAPIEndpoints {
         Path(id): Self::ControllerID,
     ) -> Result<Self::PerformReturn, Self::ServiceError> {
         trace_trace!(
-            source = SERVICE_LABEL,
             message = format!(
                 "Received HTTP request start the operation of the controller {} with streaming",
                 id
@@ -189,7 +179,6 @@ impl ControllerService for OpenAPIEndpoints {
                     Ok(event)
                 });
                 trace_trace!(
-                    source = SERVICE_LABEL,
                     message = format!(
                         "Starting SSE stream for the operation of the controller {}",
                         id
@@ -213,7 +202,6 @@ impl ControllerService for OpenAPIEndpoints {
         Path(id): Self::ControllerID,
     ) -> Result<Self::AbortReturn, Self::ServiceError> {
         trace_trace!(
-            source = SERVICE_LABEL,
             message = format!(
                 "Received HTTP request to abort the operation of controller {}",
                 id
@@ -234,10 +222,7 @@ impl ControllerService for OpenAPIEndpoints {
         Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::LockReturn, Self::ServiceError> {
-        trace_trace!(
-            source = SERVICE_LABEL,
-            message = format!("Received HTTP request to lock the controller {}", id)
-        );
+        trace_trace!(message = format!("Received HTTP request to lock the controller {}", id));
         match manager.lock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
@@ -252,10 +237,7 @@ impl ControllerService for OpenAPIEndpoints {
         Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
     ) -> Result<Self::UnlockReturn, Self::ServiceError> {
-        trace_trace!(
-            source = SERVICE_LABEL,
-            message = format!("Received HTTP request to unlock the controller {}", id)
-        );
+        trace_trace!(message = format!("Received HTTP request to unlock the controller {}", id));
         match manager.unlock(id.as_str()) {
             Ok(_) => Ok(StatusCode::OK),
             Err(err) => Err(ServiceError(err)),
@@ -274,7 +256,6 @@ impl ControllerService for OpenAPIEndpoints {
         Path(id): Self::ControllerID,
     ) -> Result<Self::StartSensorReturn, Self::ServiceError> {
         trace_trace!(
-            source = SERVICE_LABEL,
             message = format!(
                 "Received HTTP request to activate the sense of the controller {}",
                 id
@@ -296,7 +277,6 @@ impl ControllerService for OpenAPIEndpoints {
         Path(id): Self::ControllerID,
     ) -> Result<Self::StopSensorReturn, Self::ServiceError> {
         trace_trace!(
-            source = SERVICE_LABEL,
             message = format!(
                 "Received HTTP request to deactivate the sense of the controller {}",
                 id

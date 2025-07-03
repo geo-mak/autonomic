@@ -53,8 +53,6 @@ where
 }
 
 impl<'a> OpenAPIClient<'a> {
-    const CLIENT_LABEL: &'static str = "OpenAPIClient";
-
     /// Creates a new OpenAPIClient with the specified base URL.
     pub fn new(client: Client, host: &'a str) -> Self {
         OpenAPIClient { client, host }
@@ -129,10 +127,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         &self,
         controller_id: Self::ControllerID,
     ) -> Result<Self::ControllerInfo, Self::ClientError> {
-        trace_trace!(
-            source = Self::CLIENT_LABEL,
-            message = format!("Sending HTTP request to get controller {}", controller_id)
-        );
+        trace_trace!(message = format!("Sending HTTP request to get controller {}", controller_id));
         let url = format!("{}/ctrl_mgr/ctrl/{}", self.host, controller_id);
         let result = self.client.get(&url).send().await;
         Self::match_and_parse_as::<Self::ControllerInfo>(result).await
@@ -144,10 +139,7 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Ok(Vec<ControllerInfo>)`: If controllers are available.
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn list(&self) -> Result<Self::ControllersInfo, Self::ClientError> {
-        trace_trace!(
-            source = Self::CLIENT_LABEL,
-            message = format!("Sending HTTP request to get all controllers")
-        );
+        trace_trace!(message = format!("Sending HTTP request to get all controllers"));
         let url = format!("{}/ctrl_mgr/list", self.host);
         let result = self.client.get(&url).send().await;
         Self::match_and_parse_as::<Self::ControllersInfo>(result).await
@@ -160,7 +152,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn list_performing(&self) -> Result<Self::PerformingControllers, Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!("Sending HTTP request to get controllers with active operations")
         );
         let url = format!("{}/ctrl_mgr/list_performing", self.host);
@@ -178,7 +169,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         controller_id: Self::ControllerID,
     ) -> Result<Self::PerformReturn, Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to start the control operation of the controller {}",
                 controller_id
@@ -201,7 +191,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn abort(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to abort operation of the controller {}",
                 controller_id
@@ -219,7 +208,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn lock(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to lock the controller {}",
                 controller_id
@@ -237,7 +225,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
     /// - `Err(OpenAPIClientError)`: If the response is Err or when the request fails.
     async fn unlock(&self, controller_id: Self::ControllerID) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to unlock the controller {}",
                 controller_id
@@ -259,7 +246,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         controller_id: Self::ControllerID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to start the sensor of the controller {}",
                 controller_id
@@ -282,7 +268,6 @@ impl<'a> ControllerClient for OpenAPIClient<'a> {
         controller_id: Self::ControllerID,
     ) -> Result<(), Self::ClientError> {
         trace_trace!(
-            source = Self::CLIENT_LABEL,
             message = format!(
                 "Sending HTTP request to stop the sensor of the controller {}",
                 controller_id

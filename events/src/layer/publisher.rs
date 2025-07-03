@@ -4,17 +4,13 @@ use tokio::sync::broadcast;
 
 use tracing::{Event, Subscriber};
 
-use tracing_core::Metadata;
-
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::DefaultRecorder;
-use crate::traits::{EventRecorder, RecorderDirective};
-
-const DEFAULT_EVENT_PUBLISHED: &str = "DEP";
+use crate::record::{DefaultDirective, DefaultRecorder};
+use crate::traits::EventRecorder;
 
 /// Reference to the events channel for creating receivers.
 ///
@@ -28,16 +24,6 @@ const DEFAULT_EVENT_PUBLISHED: &str = "DEP";
 /// > - The lagged subscribers will receive again from the oldest event remained in channel's buffer.
 /// > - When the channel is dropped, subscribers will receive the error `RecvError::Closed`.
 pub type EventChannel<T> = broadcast::Sender<T>;
-
-/// Publisher directive enables recording default events marked as published.
-pub struct PublisherDirective;
-
-impl RecorderDirective for PublisherDirective {
-    #[inline(always)]
-    fn enabled(meta: &Metadata<'_>) -> bool {
-        meta.name() == DEFAULT_EVENT_PUBLISHED
-    }
-}
 
 /// Publisher layer for tracing subscribers.
 /// This layer does not do any filtering.
@@ -92,11 +78,8 @@ where
 /// # Type Parameters
 /// - `S`: The tracing subscriber that accepts `Filtered` types as layers.
 /// - `R`: The recorder type that filters and records events.
-///   If not provided, `DefaultRecorder<PublisherDirective>` is used by default.
-///
-/// **Note**: Currently. this type uses the schema of the recorder as its message, and doesn't expect any exports.
-/// It creates a default instance of `R::Schema`, and passes it to the recorder for updating fields.
-pub struct EventPublisher<S, R = DefaultRecorder<PublisherDirective>>
+///   If not provided, `DefaultRecorder<DefaultDirective>` is used by default.
+pub struct EventPublisher<S, R = DefaultRecorder<DefaultDirective>>
 where
     S: Subscriber,
     R: EventRecorder<Record: Clone>,
@@ -193,17 +176,9 @@ mod tests {
         // -------------------- Test Published Events ----------------------
 
         // Propagate two published events
-        trace_info!(
-            source = "published event 1",
-            message = "info message",
-            published
-        );
+        trace_info!(message = "info message");
 
-        trace_error!(
-            source = "published event 2",
-            message = "error message",
-            published
-        );
+        trace_error!(message = "error message");
 
         // We must have two unreceived events in the channel
         assert_eq!(channel.len(), 2);
@@ -215,20 +190,10 @@ mod tests {
         let received_event2 = events_receiver.recv().await.unwrap();
 
         assert_eq!(received_event1.tracing_level(), Level::INFO);
-        assert_eq!(received_event1.source(), "published event 1");
         assert_eq!(received_event1.message(), "info message");
 
         assert_eq!(received_event2.tracing_level(), Level::ERROR);
-        assert_eq!(received_event2.source(), "published event 2");
         assert_eq!(received_event2.message(), "error message");
-
-        // -------------------- Test Unpublished Events ----------------------
-
-        // Propagate unpublished event
-        trace_info!(source = "unpublished event", message = "info message");
-
-        // Sine the event is unpublished, it must have been ignored by the publisher
-        assert!(events_receiver.is_empty());
 
         // -------------------- Test Suspending Publishing ----------------------
 
@@ -238,11 +203,7 @@ mod tests {
         assert_eq!(channel.receiver_count(), 0);
 
         // Propagate event
-        trace_info!(
-            source = "published event",
-            message = "info message",
-            published
-        );
+        trace_info!(message = "info message");
 
         // No event should have been recorded and published
         assert!(channel.is_empty())

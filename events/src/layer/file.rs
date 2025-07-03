@@ -432,10 +432,7 @@ where
                 };
 
                 if let Err(e) = F::write(&ctx, &inactive_ref).await {
-                    trace_error!(
-                        source = "EventsFileStore",
-                        message = format!("Stopped: {}", e)
-                    );
+                    trace_error!(message = format!("EventsFileStore stopped: {}", e));
                     return; // <- Exit here.
                 }
 
@@ -464,6 +461,7 @@ where
     fn on_event(&self, event: &Event, _ctx: Context<S>) {
         BytesBufferCache::thread_local(|record| {
             F::record(event, &mut record.buffer);
+
             if let Ok(mut protected_buffer) = self.state.buffer.lock() {
                 let buffer = protected_buffer.current_mut();
 
@@ -546,7 +544,7 @@ mod tests {
         let _guard = subscriber::set_default(subscriber);
 
         // Propagate event to trigger flushing the buffer.
-        trace_info!(source = "event 1", message = "info message");
+        trace_info!(message = "info message");
 
         // Wait some time for writing to be triggered.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -564,7 +562,7 @@ mod tests {
         drop(buffer_guard); // <- will block recording if not dropped.
 
         // Try to propagate another event.
-        trace_info!(source = "event 3", message = "info message");
+        trace_info!(message = "info message");
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -590,7 +588,7 @@ mod tests {
     async fn test_events_file_store_write_csv() {
         let store = EventsFileStore::<Registry, CSVFormat>::new(
             Duration::from_secs(60),
-            198,
+            182,
             PathBuf::from(""),
             "events",
             "csv",
@@ -606,9 +604,9 @@ mod tests {
 
         let _guard = subscriber::set_default(subscriber);
 
-        // Propagate two events.
-        trace_info!(source = "event 1", message = "info message");
-        trace_error!(source = "event 2", message = "error message");
+        // Propagate two events without the `source` field.
+        trace_info!(message = "info message");
+        trace_error!(message = "error message");
 
         // Some time to ensure writing.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -636,23 +634,19 @@ mod tests {
         let mut error_found = false;
 
         // Expected values (without timestamps)
-        let expected_info = ("2", "event 1", "info message");
-        let expected_error = ("4", "event 2", "error message");
+        let expected_info = ("2", "info message");
+        let expected_error = ("4", "error message");
 
         // Validating records ignoring Target and Timestamp
         for record in records {
             let level = record.get(0).unwrap().trim();
-            let source = record.get(1).unwrap().trim();
-            let message = record.get(2).unwrap().trim();
+            let message = record.get(1).unwrap().trim();
 
-            if level == expected_info.0 && source == expected_info.1 && message == expected_info.2 {
+            if level == expected_info.0 && message == expected_info.1 {
                 info_found = true;
             }
 
-            if level == expected_error.0
-                && source == expected_error.1
-                && message == expected_error.2
-            {
+            if level == expected_error.0 && message == expected_error.1 {
                 error_found = true;
             }
         }
@@ -687,7 +681,7 @@ mod tests {
     async fn test_events_file_store_write_json() {
         let store = EventsFileStore::<Registry, JSONLFormat>::new(
             Duration::from_secs(60),
-            303,
+            252,
             PathBuf::from(""),
             "events",
             "jsonl",
@@ -703,9 +697,9 @@ mod tests {
 
         let _guard = subscriber::set_default(subscriber);
 
-        // Propagate two events
-        trace_info!(source = "event 1", message = "info message");
-        trace_error!(source = "event 2", message = "error message");
+        // Propagate two events without the `source` field
+        trace_info!(message = "info message");
+        trace_error!(message = "error message");
 
         // Some time to ensure writing
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -737,18 +731,12 @@ mod tests {
         let mut error_found = false;
 
         // Expected values (without target and timestamp)
-        let expected_info = (2, "event 1", "info message");
-        let expected_error = (4, "event 2", "error message");
+        let expected_info = (2, "info message");
+        let expected_error = (4, "error message");
 
         // Iterate over each JSON object
         for entry in json_objects.iter() {
             let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
-
-            let source = entry
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim();
 
             let message = entry
                 .get("message")
@@ -757,14 +745,11 @@ mod tests {
                 .trim();
 
             // Check if the entries matches expected events
-            if level == expected_info.0 && source == expected_info.1 && message == expected_info.2 {
+            if level == expected_info.0 && message == expected_info.1 {
                 info_found = true;
             }
 
-            if level == expected_error.0
-                && source == expected_error.1
-                && message == expected_error.2
-            {
+            if level == expected_error.0 && message == expected_error.1 {
                 error_found = true;
             }
         }
@@ -806,7 +791,7 @@ mod tests {
     async fn test_events_io_schemaless_records_csv() {
         let store = EventsFileStore::<Registry, CSVFormat<FilterFreeDirective>>::new(
             Duration::from_secs(60),
-            229,
+            195,
             PathBuf::from(""),
             "schemaless_events",
             "csv",
@@ -816,14 +801,10 @@ mod tests {
 
         let _guard = subscriber::set_default(subscriber);
 
-        trace_info!(source = "schema_event", message = "happy info message");
+        trace_info!(message = "happy info message");
 
         // Schemaless.
-        tracing::info!(
-            source = "schemaless_event 1",
-            message = "info message",
-            extra_field = "some extra data",
-        );
+        tracing::info!(message = "info message", extra_field = "some extra data",);
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -850,15 +831,14 @@ mod tests {
 
         for record in records {
             let level = record.get(0).unwrap().trim();
-            let source = record.get(1).unwrap().trim();
-            let message = record.get(2).unwrap().trim();
+            let message = record.get(1).unwrap().trim();
 
-            if level == "2" && source == "schema_event" && message == "happy info message" {
+            if level == "2" && message == "happy info message" {
                 normal_found = true;
             }
 
-            if level == "2" && source == "schemaless_event 1" && message == "info message" {
-                let extra_field = record.get(3).map(|s| s.trim()).unwrap_or("");
+            if level == "2" && message == "info message" {
+                let extra_field = record.get(2).map(|s| s.trim()).unwrap_or("");
                 assert_eq!(
                     extra_field, "some extra data",
                     "Extra field not recorded correctly"
@@ -879,7 +859,7 @@ mod tests {
     async fn test_events_io_schemaless_records_json() {
         let store = EventsFileStore::<Registry, JSONLFormat<FilterFreeDirective>>::new(
             Duration::from_secs(60),
-            243,
+            101,
             PathBuf::from(""),
             "schemaless_events",
             "jsonl",
@@ -889,14 +869,10 @@ mod tests {
 
         let _guard = subscriber::set_default(subscriber);
 
-        trace_info!(source = "schema_event", message = "happy info message");
+        trace_info!(message = "happy info message");
 
         // Schemaless.
-        tracing::info!(
-            source = "schemaless_event 1",
-            message = "info message",
-            extra_field = "some extra data"
-        );
+        tracing::info!(message = "info message", extra_field = "some extra data");
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -925,11 +901,6 @@ mod tests {
 
         for entry in json_objects.iter() {
             let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
-            let source = entry
-                .get("source")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim();
 
             let message = entry
                 .get("message")
@@ -937,11 +908,11 @@ mod tests {
                 .unwrap_or("")
                 .trim();
 
-            if level == 2 && source == "schema_event" && message == "happy info message" {
+            if level == 2 && message == "happy info message" {
                 normal_found = true;
             }
 
-            if level == 2 && source == "schemaless_event 1" && message == "info message" {
+            if level == 2 && message == "info message" {
                 let extra_field = entry
                     .get("extra_field")
                     .and_then(|v| v.as_str())

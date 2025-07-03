@@ -67,10 +67,7 @@ impl ControllerManager {
         if let Some(controller) = self.controllers.get(id) {
             return Ok(controller);
         }
-        trace_warn!(
-            source = Self::ID,
-            message = format!("Controller={} not found", id)
-        );
+        trace_warn!(message = format!("Controller={} not found", id));
         Err(ControllerError::NotFound)
     }
 
@@ -96,7 +93,7 @@ impl ControllerManager {
     /// - `Err(ControllerError::NoResults)`: If the manager is empty.
     pub fn list(&self) -> Result<Vec<ControllerInfo>, ControllerError> {
         if self.controllers.is_empty() {
-            trace_warn!(source = Self::ID, message = "Empty");
+            trace_warn!(message = "Empty");
             return Err(ControllerError::NoResults);
         }
         Ok(self
@@ -113,7 +110,7 @@ impl ControllerManager {
     /// - `Err(ControllerError::NoResults)`: If there are no controllers with active operations.
     pub fn list_performing(&self) -> Result<Vec<&str>, ControllerError> {
         if self.controllers.is_empty() {
-            trace_warn!(source = Self::ID, message = "Empty");
+            trace_warn!(message = "Empty");
             return Err(ControllerError::NoResults);
         }
         let running_ops: Vec<&str> = self
@@ -219,11 +216,11 @@ impl ControllerManager {
         match self.get(id) {
             Ok(controller) => {
                 if controller.locked() {
-                    trace_error!(source = id, message = "Controller locked");
+                    trace_error!(message = "Controller locked");
                     return Err(ControllerError::Locked);
                 }
                 if controller.performing() {
-                    trace_warn!(source = id, message = "Operation active");
+                    trace_warn!(message = "Operation active");
                     return Err(ControllerError::Active);
                 }
                 let stream = controller.perform();
@@ -268,11 +265,11 @@ impl ControllerManager {
         match self.get(id) {
             Ok(controller) => {
                 if controller.locked() {
-                    trace_error!(source = id, message = "Controller locked");
+                    trace_error!(message = "Controller locked");
                     return Err(ControllerError::Locked);
                 }
                 if controller.sensing() {
-                    trace_warn!(source = id, message = "Sensor Active");
+                    trace_warn!(message = "Sensor Active");
                     return Err(ControllerError::Active);
                 }
                 controller.start_sensor();

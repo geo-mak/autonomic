@@ -1,36 +1,19 @@
+pub const DEFAULT_EVENT_MARKER: &str = "DE";
+
 /// General event tracing macro.
 ///
 /// # Fields
 /// - `level`: tracing::Level
-/// - `source`: preferred `&str`, `String` or any `Debug`.
 /// - `message`: preferred `&str`, `String` or any `Debug`.
-/// - `published`: an optional marker field to indicate that an event can be published by event publishers.
-///
-/// > **Note**: Publishing is not available for `TRACE` and `DEBUG` levels.
 #[macro_export]
 macro_rules! trace_event {
-    // Case for TRACE level (no published)
-    (tracing::Level::TRACE, source = $source:expr, message = $message:expr, published) => {
-        compile_error!("The 'published' field cannot be used with TRACE level.");
-    };
-    // Case for DEBUG level (no published)
-    (tracing::Level::DEBUG, source = $source:expr, message = $message:expr, published) => {
-        compile_error!("The 'published' field cannot be used with DEBUG level.");
-    };
-    // Case for other levels without published
-    // DE: Default Event
-    ($level:expr, source = $source:expr, message = $message:expr) => {
-        tracing::event!(name: "DE", $level, source = $source, message = $message);
-    };
-    // Case for other levels with published as a marker
-    // DEP: Default Event Published
-    ($level:expr, source = $source:expr, message = $message:expr, published) => {
-        tracing::event!(name: "DEP", $level, source = $source, message = $message);
+    ($level:expr, message = $message:expr) => {
+        tracing::event!(name: "DE", $level, message = $message);
     };
     // Catch-all pattern for invalid usage
     ($($arg:tt)*) => {
         compile_error!(
-            "Invalid arguments. Use: trace_event!(level, source = ..., message = ..., published [optional]);"
+            "Invalid arguments. Use: trace_event!(level, message = ...);"
         );
     };
 }
@@ -38,112 +21,69 @@ macro_rules! trace_event {
 /// Traces event with `TRACE` level.
 ///
 /// # Fields
-/// - `source`: preferred `&str`, `String` or any `Debug`.
-/// - `message`: preferred `&str`, `String` or any `Debug`.
-///
-/// > **Note**: Publishing is not available for this event.
+/// `message`: preferred `&str`, `String` or any `Debug`.
 #[macro_export]
 macro_rules! trace_trace {
-    (source = $source:expr, message = $message:expr) => {
-        $crate::trace_event!(tracing::Level::TRACE, source = $source, message = $message)
+    (message = $message:expr) => {
+        $crate::trace_event!(tracing::Level::TRACE, message = $message)
     };
     ($($arg:tt)*) => {
-        compile_error!("Invalid arguments. Use: trace_trace!(source = ..., message = ...);");
+        compile_error!("Invalid arguments. Use: trace_trace!(message = ...);");
     };
 }
 
 /// Traces event with `DEBUG` level.
 ///
 /// # Fields
-/// - `source`: preferred `&str`, `String` or any `Debug`.
-/// - `message`: preferred `&str`, `String` or any `Debug`.
-///
-/// > **Note**: Publishing is not available for this event.
+/// `message`: preferred `&str`, `String` or any `Debug`.
 #[macro_export]
 macro_rules! trace_debug {
-    (source = $source:expr, message = $message:expr) => {
-        // Not published
-        $crate::trace_event!(tracing::Level::DEBUG, source = $source, message = $message)
+    (message = $message:expr) => {
+        $crate::trace_event!(tracing::Level::DEBUG, message = $message)
     };
     ($($arg:tt)*) => {
-        compile_error!("Invalid arguments. Use: trace_debug!(source = ..., message = ...);");
+        compile_error!("Invalid arguments. Use: trace_debug!(message = ...);");
     };
 }
 
 /// Traces event with `INFO` level.
 ///
 /// # Fields
-/// - `source`: preferred `&str`, `String` or any `Debug`.
-/// - `message`: preferred `&str`, `String` or any `Debug`.
-/// - `published`: an optional marker field to indicate that an event can be published by event publishers.
+/// `message`: preferred `&str`, `String` or any `Debug`.
 #[macro_export]
 macro_rules! trace_info {
-    (source = $source:expr, message = $message:expr) => {
-        $crate::trace_event!(tracing::Level::INFO, source = $source, message = $message)
-    };
-    (source = $source:expr, message = $message:expr, published) => {
-        $crate::trace_event!(
-            tracing::Level::INFO,
-            source = $source,
-            message = $message,
-            published
-        );
+    (message = $message:expr) => {
+        $crate::trace_event!(tracing::Level::INFO, message = $message)
     };
     ($($arg:tt)*) => {
-        compile_error!(
-            "Invalid arguments. Use: trace_info!(source = ..., message = ..., published [optional]]);"
-        );
+        compile_error!("Invalid arguments. Use: trace_info!(message = ...);");
     };
 }
 
 /// Traces event with `WARN` level.
 ///
 /// # Fields
-/// - `source`: preferred `&str`, `String` or any `Debug`.
-/// - `message`: preferred `&str`, `String` or any `Debug`.
-/// - `published`: an optional marker field to indicate that an event can be published by event publishers.
+/// `message`: preferred `&str`, `String` or any `Debug`.
 #[macro_export]
 macro_rules! trace_warn {
-    (source = $source:expr, message = $message:expr) => {
-        $crate::trace_event!(tracing::Level::WARN, source = $source, message = $message)
-    };
-    (source = $source:expr, message = $message:expr, published) => {
-        $crate::trace_event!(
-            tracing::Level::WARN,
-            source = $source,
-            message = $message,
-            published
-        )
+    (message = $message:expr) => {
+        $crate::trace_event!(tracing::Level::WARN, message = $message)
     };
     ($($arg:tt)*) => {
-        compile_error!(
-            "Invalid arguments. Use: trace_warn!(source = ..., message = ..., published [optional]);"
-        );
+        compile_error!("Invalid arguments. Use: trace_warn!(message = ...);");
     };
 }
 
 /// Traces event with `ERROR` level.
 ///
 /// # Fields
-/// - `source`: preferred `&str`, `String` or any `Debug`.
-/// - `message`: preferred `&str`, `String` or any `Debug`.
-/// - `published`: an optional marker field to indicate that an event can be published by event publishers.
+/// `message`: preferred `&str`, `String` or any `Debug`.
 #[macro_export]
 macro_rules! trace_error {
-    (source = $source:expr, message = $message:expr) => {
-        $crate::trace_event!(tracing::Level::ERROR, source = $source, message = $message)
-    };
-    (source = $source:expr, message = $message:expr, published) => {
-        $crate::trace_event!(
-            tracing::Level::ERROR,
-            source = $source,
-            message = $message,
-            published
-        )
+    (message = $message:expr) => {
+        $crate::trace_event!(tracing::Level::ERROR, message = $message)
     };
     ($($arg:tt)*) => {
-        compile_error!(
-            "Invalid arguments. Use: trace_error!(source = ..., message = ..., published [optional]);"
-        );
+        compile_error!("Invalid arguments. Use: trace_error!(message = ...);");
     };
 }

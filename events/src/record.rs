@@ -1,6 +1,7 @@
 use core::fmt::Debug;
 use std::error::Error;
 use std::fmt;
+use std::fmt::Write;
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use tracing_core::field::Visit;
 
 use chrono::{DateTime, Utc};
 
+use crate::tracing::DEFAULT_EVENT_MARKER;
 use crate::traits::{EventRecorder, RecorderDirective};
 
 /// A visitor that serializes records as JSON Lines (JSONL) into the provided buffer.
@@ -133,74 +135,63 @@ impl<'a, T: std::io::Write> Visit for CSVVisitor<'a, T> {
     }
 }
 
-/// A visitor struct that holds mutable references to a source and message string.
+/// A visitor that concatenates all record fields into a single string buffer.
 ///
-/// # Recording Fields
-/// - `source`: As str or debug only.
-/// - `message`: As str, debug or error.
-pub struct DefaultRecorderVisitor<'a> {
-    source: &'a mut String,
+/// This struct writes each field value directly to the provided string buffer without any separators
+/// or field names. All values are concatenated sequentially as they are visited. No schema is enforced
+/// on the data being written; the structure and validity of each record is determined by the caller.
+/// As a result, the responsibility for correct reading and interpretation of the output is left to
+/// the consumers that process the concatenated string data.
+pub struct StringVisitor<'a> {
     message: &'a mut String,
 }
 
-impl<'a> DefaultRecorderVisitor<'a> {
+impl<'a> StringVisitor<'a> {
     #[inline(always)]
-    pub const fn new(source: &'a mut String, message: &'a mut String) -> Self {
-        Self { source, message }
+    pub const fn new(message: &'a mut String) -> Self {
+        Self { message }
     }
 }
 
-// > Note: Types that don't have corresponding methods are recorded as `Debug` by default.
-impl<'a> Visit for DefaultRecorderVisitor<'a> {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        let len = value.len();
-
-        // Empty values are skipped
-        if len == 0 {
-            return;
-        }
-
-        // Remove quotes if present, which is common when using `format!` macro with debug {:?}
-        let val = if len >= 2 {
-            let bytes = value.as_bytes();
-            if bytes[0] == b'"' && bytes[len - 1] == b'"' {
-                let trimmed = &value[1..len - 1];
-                // Empty values are skipped
-                if trimmed.is_empty() {
-                    return;
-                }
-                trimmed
-            } else {
-                value
-            }
-        } else {
-            value
-        };
-
-        match field.name() {
-            "source" => {
-                self.source.push_str(val);
-            }
-            "message" => {
-                self.message.push_str(val);
-            }
-            _ => {}
-        }
+impl<'a> Visit for StringVisitor<'a> {
+    fn record_str(&mut self, _field: &Field, value: &str) {
+        let _ = write!(self.message, "{value}");
     }
 
-    fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
-        // Only message is allowed to be recorded as error
-        if field.name() == "message" {
-            *self.message = value.to_string();
-        }
+    fn record_error(&mut self, _field: &Field, value: &(dyn Error + 'static)) {
+        let _ = write!(self.message, "{value}");
     }
 
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        match field.name() {
-            "source" => *self.source = format!("{value:?}"),
-            "message" => *self.message = format!("{value:?}"),
-            _ => {}
-        }
+    fn record_debug(&mut self, _field: &Field, value: &dyn fmt::Debug) {
+        let _ = write!(self.message, "{value:?}");
+    }
+
+    fn record_f64(&mut self, _field: &Field, value: f64) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_i64(&mut self, _field: &Field, value: i64) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_u64(&mut self, _field: &Field, value: u64) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_i128(&mut self, _field: &Field, value: i128) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_u128(&mut self, _field: &Field, value: u128) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_bool(&mut self, _field: &Field, value: bool) {
+        let _ = write!(self.message, "{value}");
+    }
+
+    fn record_bytes(&mut self, _field: &Field, value: &[u8]) {
+        let _ = write!(self.message, "{value:02x?}");
     }
 }
 
@@ -220,7 +211,6 @@ pub const fn level_to_byte(level: Level) -> u8 {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DefaultEvent {
     pub(crate) level: u8,
-    pub(crate) source: String,
     pub(crate) message: String,
     pub(crate) target: String,
     pub(crate) timestamp: DateTime<Utc>,
@@ -229,14 +219,12 @@ pub struct DefaultEvent {
 impl DefaultEvent {
     pub const fn new(
         level: Level,
-        source: String,
         message: String,
         target: String,
         timestamp: DateTime<Utc>,
     ) -> Self {
         Self {
             level: level_to_byte(level),
-            source,
             message,
             target,
             timestamp,
@@ -260,11 +248,6 @@ impl DefaultEvent {
     }
 
     #[inline(always)]
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
-    #[inline(always)]
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -283,27 +266,20 @@ impl DefaultEvent {
 /// Creates a new `DefaultSchema` instance with default values for all fields.
 ///
 /// - `level`: Set to `0`.
-/// - `source`: An empty `String`.
 /// - `message`: An empty `String`.
 /// - `target`: An empty `String`.
 /// - `timestamp`: Set to the current UTC time at the moment of creation.
-///
-/// This provides a baseline event with no specific source, message, or target,
-/// and a level of zero.
 impl Default for DefaultEvent {
     #[inline]
     fn default() -> Self {
         Self {
             level: 0,
-            source: String::new(),
             message: String::new(),
             target: String::new(),
             timestamp: Utc::now(),
         }
     }
 }
-
-const DEFAULT_EVENT: &str = "DE";
 
 /// Default directive enables recording default events.
 pub struct DefaultDirective;
@@ -314,11 +290,11 @@ impl RecorderDirective for DefaultDirective {
     /// for the same metadata.
     #[inline(always)]
     fn enabled(meta: &Metadata<'_>) -> bool {
-        meta.name().starts_with(DEFAULT_EVENT)
+        meta.name() == DEFAULT_EVENT_MARKER
     }
 }
 
-/// Event recorder with `DefaultEventVisitor` as its recorder and `DefaultEvent` as its output.
+/// Event recorder with `StringVisitor` as its recorder and `DefaultEvent` as its output.
 ///
 /// # Type Parameters
 /// - `T`: The directive type that checks if the recorder is enabled based on the current metadata.
@@ -350,11 +326,10 @@ where
     fn record(event: &Event) -> Self::Record {
         let mut record = Self::Record::default();
 
-        let mut visitor = DefaultRecorderVisitor::new(&mut record.source, &mut record.message);
+        let mut visitor = StringVisitor::new(&mut record.message);
 
         event.record(&mut visitor);
 
-        // TODO: Should events with no source or message remain allowed?
         record.level = level_to_byte(*event.metadata().level());
         record.target.push_str(event.metadata().target());
 
@@ -370,9 +345,8 @@ mod tests {
     fn test_default_schema_serde() {
         let original_schema = DefaultEvent::new(
             Level::INFO,
-            "test_source".to_string(),
-            "test_message".to_string(),
-            "test_path".to_string(),
+            "message".to_string(),
+            "path".to_string(),
             Utc::now(),
         );
 
@@ -383,7 +357,6 @@ mod tests {
             serde_json::from_str(&serialized).expect("Failed to deserialize DefaultEvent");
 
         assert_eq!(original_schema.level(), deserialized_schema.level());
-        assert_eq!(original_schema.source(), deserialized_schema.source());
         assert_eq!(original_schema.message(), deserialized_schema.message());
         assert_eq!(original_schema.target(), deserialized_schema.target());
         assert_eq!(original_schema.timestamp(), deserialized_schema.timestamp());

@@ -288,7 +288,7 @@ impl ControlUnit {
     #[inline]
     pub fn lock(&self) {
         self.op_state.store(2, SeqCst);
-        trace_warn!(source = self.controller.id(), message = "Controller locked");
+        trace_warn!(message = "Controller locked");
     }
 
     /// Unlocks the controller **only** if it is currently locked.
@@ -297,10 +297,7 @@ impl ControlUnit {
         // Unlocking is only allowed if the operation is currently locked.
         if self.op_state.load(SeqCst) == 2 {
             self.op_state.store(0, SeqCst);
-            trace_info!(
-                source = self.controller.id(),
-                message = "Controller unlocked"
-            );
+            trace_info!(message = "Controller unlocked");
         }
     }
 
@@ -329,10 +326,9 @@ impl ControlUnit {
     ///
     /// Controller must be checked by the manager if it is currently locked or if its op is active.
     pub fn perform(&'static self) -> Receiver<OpState> {
-        let id = self.controller.id();
         // Set active to prevent another activation while running.
         self.op_state.store(1, SeqCst);
-        trace_info!(source = id, message = "Started");
+        trace_info!(message = "Started");
         let (tx, rx) = watch::channel(OpState::Started);
         tokio::spawn(async move {
             let result = std::panic::AssertUnwindSafe(self.controller.perform(&self.ctx))
@@ -341,35 +337,35 @@ impl ControlUnit {
             let state = match result {
                 Ok(op_result) => match op_result {
                     ControllerResult::Ok => {
-                        trace_info!(source = id, message = "Returned: Ok");
+                        trace_info!(message = "Returned: Ok");
                         OpState::Ok(None)
                     }
                     ControllerResult::OkMsg(msg) => {
-                        trace_info!(source = id, message = "Returned: Ok");
+                        trace_info!(message = "Returned: Ok");
                         OpState::Ok(Some(msg))
                     }
                     ControllerResult::Err => {
-                        trace_warn!(source = id, message = "Returned: Error");
+                        trace_warn!(message = "Returned: Error");
                         OpState::Failed(None)
                     }
                     ControllerResult::ErrMsg(msg) => {
-                        trace_warn!(source = id, message = "Returned: Error");
+                        trace_warn!(message = "Returned: Error");
                         OpState::Failed(Some(msg))
                     }
                     ControllerResult::Abort => {
-                        trace_warn!(source = id, message = "Returned: Abort");
+                        trace_warn!(message = "Returned: Abort");
                         OpState::Aborted
                     }
                     ControllerResult::Lock(msg) => {
                         self.op_state.store(2, SeqCst);
-                        trace_warn!(source = id, message = "Returned: Lock");
+                        trace_warn!(message = "Returned: Lock");
                         let _ = tx.send(OpState::Locked(Some(msg)));
                         return; // <- Exit here.
                     }
                 },
                 Err(err) => {
                     self.op_state.store(2, SeqCst);
-                    trace_error!(source = id, message = "Panicked");
+                    trace_error!(message = "Panicked");
                     let _ = tx.send(OpState::Panicked(Self::panic_message(err)));
                     return; // <- Exit here.
                 }
@@ -385,7 +381,7 @@ impl ControlUnit {
     /// > **Note**: It sends abort signal, but it does not guarantee the aborting.
     #[inline]
     pub fn abort(&self) {
-        trace_trace!(source = self.controller.id(), message = "Abort requested");
+        trace_trace!(message = "Abort requested");
         self.ctx.sig_abort.notify()
     }
 
@@ -395,9 +391,8 @@ impl ControlUnit {
     ///
     /// Controller must be checked by the manager if it is currently locked or sensing.
     pub fn start_sensor(&'static self) {
-        let id = self.controller.id();
         self.sensing.store(true, SeqCst);
-        trace_info!(source = id, message = "Sensor Activated");
+        trace_info!(message = "Sensor Activated");
         tokio::spawn(async move {
             let result = std::panic::AssertUnwindSafe(async {
                 loop {
@@ -424,13 +419,12 @@ impl ControlUnit {
             match result {
                 Ok(_) => {
                     self.sensing.store(false, SeqCst);
-                    trace_info!(source = id, message = "Sensor Deactivated");
+                    trace_info!(message = "Sensor Deactivated");
                 }
                 Err(err) => {
                     self.sensing.store(false, SeqCst);
                     self.op_state.store(2, SeqCst);
                     trace_error!(
-                        source = id,
                         message = format!(
                             "Control operation has panicked: {}",
                             Self::panic_message(err)
@@ -443,10 +437,7 @@ impl ControlUnit {
 
     /// Deactivates the sensor of the controller if it is currently active.
     pub fn stop_sensor(&self) {
-        trace_trace!(
-            source = self.controller.id(),
-            message = "Sensor deactivation requested"
-        );
+        trace_trace!(message = "Sensor deactivation requested");
         self.sig_stop.notify();
     }
 }

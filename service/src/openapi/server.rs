@@ -53,41 +53,26 @@ impl OpenAPIServer {
     /// - `address`: The address to bind the service to.
     /// - `router`: The router that contains the OpenAPI endpoints.
     pub async fn serve(&self, address: SocketAddr, router: Router) {
-        trace_trace!(
-            source = "OpenAPIServer",
-            message = "Starting OpenAPI service..."
-        );
+        trace_trace!(message = "Starting OpenAPI service...");
         let shutdown_signal = self.shutdown_tx.clone();
         if let Ok(listener) = tokio::net::TcpListener::bind(address).await {
-            trace_trace!(
-                source = "OpenAPIServer",
-                message = format!("OpenAPI service serving at: {}", address)
-            );
+            trace_trace!(message = format!("OpenAPI service serving at: {}", address));
             if let Err(e) = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     shutdown_signal.notified().await;
                 })
                 .await
             {
-                trace_error!(
-                    source = "OpenAPIServer",
-                    message = format!("Failed to start service: {}", e)
-                );
+                trace_error!(message = format!("Failed to start service: {}", e));
             }
         } else {
-            trace_error!(
-                source = "OpenAPIServer",
-                message = format!("Failed to bind on {}", address)
-            );
+            trace_error!(message = format!("Failed to bind on {}", address));
         }
     }
 
     /// Stops the OpenAPI service.
     pub fn stop(&self) {
-        trace_trace!(
-            source = "OpenAPIServer",
-            message = "Initiating OpenAPI service shutdown..."
-        );
+        trace_trace!(message = "Initiating OpenAPI service shutdown...");
         self.shutdown_tx.notify_one();
     }
 
@@ -114,36 +99,21 @@ impl OpenAPIServer {
         cert_path: impl AsRef<Path>,
         key_path: impl AsRef<Path>,
     ) {
-        trace_trace!(
-            source = "OpenAPIServer",
-            message = "Starting OpenAPI TLS service..."
-        );
+        trace_trace!(message = "Starting OpenAPI TLS service...");
         let io_result = RustlsConfig::from_pem_file(cert_path, key_path).await;
 
         match io_result {
             Ok(config) => {
-                trace_trace!(
-                    source = "OpenAPIServer",
-                    message = "TLS configurations loaded successfully"
-                );
+                trace_trace!(message = "TLS configurations loaded successfully");
                 let server: Server<RustlsAcceptor> =
                     axum_server::bind_rustls(address, config).handle(self.shutdown_tx_tls.clone());
-                trace_trace!(
-                    source = "OpenAPIServer",
-                    message = format!("OpenAPI TLS service serving at: {}", address)
-                );
+                trace_trace!(message = format!("OpenAPI TLS service serving at: {}", address));
                 if let Err(e) = server.serve(router.into_make_service()).await {
-                    trace_error!(
-                        source = "OpenAPIServer",
-                        message = format!("Failed to start OpenAPI TLS service: {}", e)
-                    );
+                    trace_error!(message = format!("Failed to start OpenAPI TLS service: {}", e));
                 }
             }
             Err(e) => {
-                trace_error!(
-                    source = "OpenAPIServer",
-                    message = format!("Failed to load TLS config: {}", e)
-                );
+                trace_error!(message = format!("Failed to load TLS config: {}", e));
             }
         }
     }
@@ -151,10 +121,7 @@ impl OpenAPIServer {
     /// Stops the OpenAPI service with TLS.
     #[cfg(feature = "openapi-server-tls")]
     pub fn stop_tls(&self) {
-        trace_trace!(
-            source = "OpenAPIServer",
-            message = "Initiating OpenAPI TLS service shutdown..."
-        );
+        trace_trace!(message = "Initiating OpenAPI TLS service shutdown...");
         self.shutdown_tx_tls.shutdown();
     }
 }
