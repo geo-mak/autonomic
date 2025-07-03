@@ -327,15 +327,19 @@ where
     /// Note: Timestamp is not recorded.
     #[inline]
     fn record(event: &Event) -> Self::Record {
-        let mut record = Self::Record::default();
+        let mut message = String::new();
 
         // TODO: Handle recording errors.
-        let mut visitor = StringVisitor::new(&mut record.message);
+        let mut visitor = StringVisitor::new(&mut message);
 
         event.record(&mut visitor);
 
-        record.level = level_to_byte(*event.metadata().level());
-        record.target.push_str(event.metadata().target());
+        let record = DefaultEvent {
+            level: level_to_byte(*event.metadata().level()),
+            message,
+            target: event.metadata().target().to_string(),
+            timestamp: Utc::now(),
+        };
 
         record
     }
