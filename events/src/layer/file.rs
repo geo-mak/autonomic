@@ -565,7 +565,7 @@ mod tests {
         let store = EventsFileStore::<Registry, JSONLFormat>::new(
             // Long interval to ensure size limit triggers write.
             Duration::from_secs(60),
-            269,
+            300,
             PathBuf::from(""),
             "size_limit_events",
             "jsonl",
