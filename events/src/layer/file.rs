@@ -491,7 +491,145 @@ mod tests {
     use csv::ReaderBuilder;
     use serde_json::Value;
 
-    use crate::{trace_error, trace_info};
+    use crate::trace_info;
+
+    #[tokio::test]
+    async fn test_events_file_store_write_interval() {
+        let store = EventsFileStore::<Registry, JSONLFormat>::new(
+            Duration::from_millis(50),
+            1000,
+            PathBuf::from(""),
+            "interval_events",
+            "jsonl",
+        );
+
+        let store_data = store.inner().state.clone();
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 0);
+        assert_eq!(buffer_lock.inactive_index(), 1);
+        assert!(buffer_lock.current().is_empty());
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        let subscriber = Registry::default().with(store);
+        let _guard = subscriber::set_default(subscriber);
+
+        trace_info!(message = "first event");
+        trace_info!(message = "second event");
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 0);
+        assert_eq!(buffer_lock.inactive_index(), 1);
+        // Not.
+        assert!(!buffer_lock.current().is_empty());
+        // Is.
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        tokio::time::sleep(Duration::from_millis(70)).await;
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 1);
+        assert_eq!(buffer_lock.inactive_index(), 0);
+        assert!(buffer_lock.current().is_empty());
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let full_path = format!("{}/interval_events.jsonl", cargo_manifest_dir);
+
+        let file_content = tokio::fs::read_to_string(&full_path)
+            .await
+            .expect("Failed to read JSON Lines file");
+
+        let json_objects: Vec<Value> = file_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("Failed to parse JSON line"))
+            .collect();
+
+        // Should have at least the first event written by interval
+        assert!(json_objects.len() == 2, "File should contain 2 events");
+
+        // Spring time.
+        assert!(store_data.enabled.load(Ordering::Acquire));
+
+        tokio::fs::remove_file(full_path)
+            .await
+            .expect("Failed to delete events file");
+    }
+
+    #[tokio::test]
+    async fn test_events_file_store_write_limit() {
+        let store = EventsFileStore::<Registry, JSONLFormat>::new(
+            // Long interval to ensure size limit triggers write.
+            Duration::from_secs(60),
+            269,
+            PathBuf::from(""),
+            "size_limit_events",
+            "jsonl",
+        );
+
+        let store_data = store.inner().state.clone();
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 0);
+        assert_eq!(buffer_lock.inactive_index(), 1);
+        assert!(buffer_lock.current().is_empty());
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        let subscriber = Registry::default().with(store);
+        let _guard = subscriber::set_default(subscriber);
+
+        trace_info!(message = format!("event number 1"));
+        trace_info!(message = format!("event number 2"));
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 0);
+        assert_eq!(buffer_lock.inactive_index(), 1);
+        // Not.
+        assert!(!buffer_lock.current().is_empty());
+        // Is.
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        trace_info!(message = "event number 3");
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let buffer_lock = store_data.buffer.lock().unwrap();
+        assert_eq!(buffer_lock.current, 1);
+        assert_eq!(buffer_lock.inactive_index(), 0);
+        assert!(buffer_lock.current().is_empty());
+        assert!(buffer_lock.inactive().is_empty());
+        drop(buffer_lock);
+
+        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+        let full_path = format!("{}/size_limit_events.jsonl", cargo_manifest_dir);
+
+        let file_content = tokio::fs::read_to_string(&full_path)
+            .await
+            .expect("Failed to read JSON Lines file");
+
+        let json_objects: Vec<Value> = file_content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("Failed to parse JSON line"))
+            .collect();
+
+        assert!(json_objects.len() == 3, "File should contain 3 events");
+
+        // Spring time.
+        assert!(store_data.enabled.load(Ordering::Acquire));
+
+        tokio::fs::remove_file(full_path)
+            .await
+            .expect("Failed to delete events file");
+    }
 
     // Mock file format that simulates a write error.
     struct MockFileFormat<const PANIC: bool>;
@@ -586,201 +724,6 @@ mod tests {
         test_events_file_store_error::<true>().await;
     }
 
-    #[tokio::test]
-    async fn test_events_file_store_write_csv() {
-        let store = EventsFileStore::<Registry, CSVFormat>::new(
-            Duration::from_secs(60),
-            182,
-            PathBuf::from(""),
-            "events",
-            "csv",
-        );
-
-        let store_data = store.inner().state.clone();
-
-        let buffer_lock = store_data.buffer.lock().unwrap();
-        debug_assert_eq!(buffer_lock.inactive_index(), 1);
-        drop(buffer_lock);
-
-        let subscriber = Registry::default().with(store);
-
-        let _guard = subscriber::set_default(subscriber);
-
-        // Propagate two events without the `source` field.
-        trace_info!(message = "info message");
-        trace_error!(message = "error message");
-
-        // Some time to ensure writing.
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let full_path = format!("{}/events.csv", cargo_manifest_dir);
-
-        let mut reader = ReaderBuilder::new()
-            .has_headers(false)
-            .from_path(&full_path)
-            .expect("Failed to open CSV file");
-
-        let records = reader.records().map(|r| r.unwrap()).collect::<Vec<_>>();
-
-        // We must have only 2 entries for 2 events
-        assert_eq!(
-            records.len(),
-            2,
-            "Expected 2 entries in the events file, but found {}",
-            records.len()
-        );
-
-        // Flags to track if we found the expected log entries
-        let mut info_found = false;
-        let mut error_found = false;
-
-        // Expected values (without timestamps)
-        let expected_info = ("2", "info message");
-        let expected_error = ("4", "error message");
-
-        // Validating records ignoring Target and Timestamp
-        for record in records {
-            let level = record.get(0).unwrap().trim();
-            let message = record.get(1).unwrap().trim();
-
-            if level == expected_info.0 && message == expected_info.1 {
-                info_found = true;
-            }
-
-            if level == expected_error.0 && message == expected_error.1 {
-                error_found = true;
-            }
-        }
-
-        // Assert the expected entries are found
-        assert!(info_found, "INFO entry not found or schema mismatch");
-        assert!(error_found, "ERROR entry not found or schema mismatch");
-
-        // Recording must remain enabled.
-        assert!(store_data.enabled.load(Ordering::Acquire));
-
-        let buffer_guard = store_data.buffer.lock().unwrap();
-
-        debug_assert_eq!(buffer_guard.inactive_index(), 0);
-
-        // Both should be empty now, because the active written has been flushed,
-        // and swap is not yet used, but their capacity must not be 0.
-        let swap_buf = buffer_guard.inactive();
-        assert!(swap_buf.is_empty());
-        assert_ne!(swap_buf.capacity(), 0);
-
-        let current_buf = buffer_guard.current();
-        assert!(current_buf.is_empty());
-        assert_ne!(current_buf.capacity(), 0);
-
-        tokio::fs::remove_file(full_path)
-            .await
-            .expect("Failed to delete events file");
-    }
-
-    #[tokio::test]
-    async fn test_events_file_store_write_json() {
-        let store = EventsFileStore::<Registry, JSONLFormat>::new(
-            Duration::from_secs(60),
-            252,
-            PathBuf::from(""),
-            "events",
-            "jsonl",
-        );
-
-        let store_data = store.inner().state.clone();
-
-        let buffer_lock = store_data.buffer.lock().unwrap();
-        debug_assert_eq!(buffer_lock.inactive_index(), 1);
-        drop(buffer_lock);
-
-        let subscriber = Registry::default().with(store);
-
-        let _guard = subscriber::set_default(subscriber);
-
-        // Propagate two events without the `source` field
-        trace_info!(message = "info message");
-        trace_error!(message = "error message");
-
-        // Some time to ensure writing
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-        let full_path = format!("{}/events.jsonl", cargo_manifest_dir);
-
-        let file_content = tokio::fs::read_to_string(&full_path)
-            .await
-            .expect("Failed to read JSON Lines file");
-
-        // Parse each line as a separate JSON object
-        let json_objects: Vec<Value> = file_content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).expect("Failed to parse JSON line"))
-            .collect();
-
-        // We must have only 2 entries for 2 events
-        assert_eq!(
-            json_objects.len(),
-            2,
-            "Expected 2 entries in the events file, but found {}",
-            json_objects.len()
-        );
-
-        // Flags to track if we found the expected log entries
-        let mut info_found = false;
-        let mut error_found = false;
-
-        // Expected values (without target and timestamp)
-        let expected_info = (2, "info message");
-        let expected_error = (4, "error message");
-
-        // Iterate over each JSON object
-        for entry in json_objects.iter() {
-            let level = entry.get("level").and_then(|v| v.as_u64()).unwrap_or(5);
-
-            let message = entry
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim();
-
-            // Check if the entries matches expected events
-            if level == expected_info.0 && message == expected_info.1 {
-                info_found = true;
-            }
-
-            if level == expected_error.0 && message == expected_error.1 {
-                error_found = true;
-            }
-        }
-
-        assert!(info_found, "INFO entry not found or schema mismatch");
-        assert!(error_found, "ERROR entry not found or schema mismatch");
-
-        // Recording must remain enabled.
-        assert!(store_data.enabled.load(Ordering::Acquire));
-
-        let buffer_guard = store_data.buffer.lock().unwrap();
-
-        debug_assert_eq!(buffer_guard.inactive_index(), 0);
-
-        // Both should be empty now, because the active written has been flushed,
-        // and swap is not yet used, but their capacity must not be 0.
-        let swap_buf = buffer_guard.inactive();
-        assert!(swap_buf.is_empty());
-        assert_ne!(swap_buf.capacity(), 0);
-
-        let current_buf = buffer_guard.current();
-        assert!(current_buf.is_empty());
-        assert_ne!(current_buf.capacity(), 0);
-
-        tokio::fs::remove_file(full_path)
-            .await
-            .expect("Failed to delete events file");
-    }
-
     struct FilterFreeDirective;
 
     impl RecorderDirective for FilterFreeDirective {
@@ -790,7 +733,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_events_io_schemaless_records_csv() {
+    async fn test_events_store_io_csv() {
         let store = EventsFileStore::<Registry, CSVFormat<FilterFreeDirective>>::new(
             Duration::from_secs(60),
             195,
@@ -858,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_events_io_schemaless_records_json() {
+    async fn test_events_store_io_json() {
         let store = EventsFileStore::<Registry, JSONLFormat<FilterFreeDirective>>::new(
             Duration::from_secs(60),
             101,

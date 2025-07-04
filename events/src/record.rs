@@ -334,14 +334,12 @@ where
 
         event.record(&mut visitor);
 
-        let record = DefaultEvent {
+        DefaultEvent {
             level: level_to_byte(*event.metadata().level()),
             message,
             target: event.metadata().target().to_string(),
             timestamp: Utc::now(),
-        };
-
-        record
+        }
     }
 }
 

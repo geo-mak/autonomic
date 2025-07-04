@@ -9,7 +9,6 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::Context;
 
 use crate::layer::filter::CallSiteFilter;
-use crate::record::{DefaultDirective, DefaultRecorder};
 use crate::traits::EventRecorder;
 
 /// Reference to the events channel for creating receivers.
@@ -24,10 +23,10 @@ use crate::traits::EventRecorder;
 /// > - The lagged subscribers will receive again from the oldest event remained in channel's buffer.
 /// > - When the channel is dropped, subscribers will receive the error `RecvError::Closed`.
 pub type EventChannel<T> = broadcast::Sender<T>;
+pub type PublisherLayer<S, R, D> = Filtered<EventPublisher<S, R>, CallSiteFilter<S, D>, S>;
 
 /// Publisher layer for tracing subscribers.
-/// This layer does not do any filtering.
-pub struct PublisherLayer<S, R>
+pub struct EventPublisher<S, R>
 where
     S: Subscriber,
     R: EventRecorder,
@@ -36,21 +35,59 @@ where
     channel: EventChannel<R::Record>,
 }
 
-impl<S, R> PublisherLayer<S, R>
+impl<S, R> EventPublisher<S, R>
 where
     S: Subscriber,
     R: EventRecorder<Record: Clone> + 'static,
 {
-    fn new(buffer: usize) -> Self {
+    /// Creates new `EventPublisher` instance.
+    ///
+    /// # Parameters
+    /// -`buffer`: The size of the channel's buffer to retain unreceived events.
+    ///
+    /// **Note**: Buffer size must be greater than `16`.
+    /// If value is less than `16`, it will be set to `16`.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use tracing::subscriber;
+    /// use tracing_core::Level;
+    /// use tracing_subscriber::Registry;
+    /// use tracing_subscriber::layer::SubscriberExt;
+    ///
+    /// use autonomic_events::layer::publisher::{EventChannel, EventPublisher};
+    /// use autonomic_events::record::{DefaultEvent, DefaultRecorder};
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     // A new publisher with the default recorder and directive
+    ///     let (channel, publisher) = EventPublisher::<Registry, DefaultRecorder>::new(16);
+    ///
+    ///     // Initialize the tracing subscriber with publisher as layer
+    ///     let tracing_subscriber = Registry::default().with(publisher);
+    ///
+    ///     // Make subscriber a valid default for the entire test
+    ///     let _guard = subscriber::set_default(tracing_subscriber);
+    ///
+    ///     // Create subscriber to publisher's channel
+    ///     let mut events_receiver = channel.subscribe();
+    /// }
+    /// ```
+    #[must_use]
+    pub fn new(buffer: usize) -> (EventChannel<R::Record>, PublisherLayer<S, R, R::Directive>) {
         let (tx, _) = broadcast::channel::<R::Record>(buffer.max(16));
-        Self {
+        let instance = Self {
             _subscriber: PhantomData,
             channel: tx,
-        }
+        };
+        (
+            instance.channel.clone(),
+            Filtered::new(instance, CallSiteFilter::new()),
+        )
     }
 }
 
-impl<S, R> Layer<S> for PublisherLayer<S, R>
+impl<S, R> Layer<S> for EventPublisher<S, R>
 where
     S: Subscriber,
     R: EventRecorder<Record: Clone> + 'static,
@@ -72,76 +109,6 @@ where
     }
 }
 
-/// Publishing layer for tracing subscribers.
-/// Publisher records events and publishes them to a broadcast channel.
-///
-/// # Type Parameters
-/// - `S`: The tracing subscriber that accepts `Filtered` types as layers.
-/// - `R`: The recorder type that filters and records events.
-///   If not provided, `DefaultRecorder<DefaultDirective>` is used by default.
-pub struct EventPublisher<S, R = DefaultRecorder<DefaultDirective>>
-where
-    S: Subscriber,
-    R: EventRecorder<Record: Clone>,
-{
-    inner: Filtered<PublisherLayer<S, R>, CallSiteFilter<S, R::Directive>, S>,
-}
-
-impl<S, R> EventPublisher<S, R>
-where
-    S: Subscriber,
-    R: EventRecorder<Record: Clone> + 'static,
-{
-    /// Creates new `EventPublisher` instance.
-    ///
-    /// # Parameters
-    /// -`buffer`: The size of the channel's buffer to retain unreceived events.
-    ///
-    /// > **Note**:
-    /// > - Buffer size must be greater than `16`.
-    /// > If value is less than `16`, it will be set to `16`.
-    /// > - This instance can't be used as layer directly. Use `into_layer()` method to transform
-    /// > it into `Filtered` layer after referencing its channel.
-    ///
-    /// # Example
-    /// ```
-    /// use tracing_subscriber::layer::SubscriberExt;
-    /// use tracing_subscriber::Registry;
-    ///
-    /// use autonomic_events::layer::publisher::{EventChannel, EventPublisher};
-    /// use autonomic_events::record::DefaultEvent;
-    ///
-    ///  // A new publisher with the default recorder and directive
-    ///  let publisher = EventPublisher::<Registry>::new(16);
-    ///  // A reference to channel before transforming publisher into layer
-    ///  let channel = publisher.channel();
-    ///  // Initialize the tracing subscriber with publisher as layer
-    ///  let tracing_subscriber = Registry::default().with(publisher.into_layer());
-    ///  // New subscriber to publisher's channel
-    ///  let mut events_receiver = channel.subscribe();
-    /// ```
-    pub fn new(buffer: usize) -> Self {
-        Self {
-            inner: Filtered::new(PublisherLayer::new(buffer), CallSiteFilter::new()),
-        }
-    }
-
-    /// Returns a reference to the channel for creating subscribers.
-    ///
-    /// Subscribers can be created from the channel using `subscribe()` method.
-    ///
-    /// > **Note**: Recording and publishing events will be **suspended**,
-    /// > when there are **no active subscribers** to receive events.
-    pub fn channel(&self) -> EventChannel<R::Record> {
-        self.inner.inner().channel.clone()
-    }
-
-    /// Consumes the publisher and returns its `Layer` fused with its filter as `Filtered` layer.
-    pub fn into_layer(self) -> Filtered<PublisherLayer<S, R>, CallSiteFilter<S, R::Directive>, S> {
-        self.inner
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,21 +118,17 @@ mod tests {
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use crate::record::DefaultEvent;
-    use crate::{trace_error, trace_info};
+    use crate::{record::DefaultRecorder, trace_error, trace_info};
 
     #[tokio::test]
     async fn test_publisher_publish_stop_on_error() {
         // -------------------- Shared Setup ----------------------
 
         // A new publisher with the default recorder and directive
-        let publisher = EventPublisher::<Registry>::new(16);
-
-        // A reference to channel before moving publisher
-        let channel: EventChannel<DefaultEvent> = publisher.channel();
+        let (channel, publisher) = EventPublisher::<Registry, DefaultRecorder>::new(16);
 
         // Initialize the tracing subscriber with publisher as layer
-        let tracing_subscriber = Registry::default().with(publisher.into_layer());
+        let tracing_subscriber = Registry::default().with(publisher);
 
         // Make subscriber a valid default for the entire test
         let _guard = subscriber::set_default(tracing_subscriber);
