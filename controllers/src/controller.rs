@@ -227,10 +227,18 @@ impl AtomicState {
             .is_ok()
     }
 
-    /// Non-versioned `fetch_or`.
+    /// Versioned `fetch_or`.
     #[inline(always)]
-    fn fetch_or(&self, state: u8) {
-        self.inner.fetch_or(state as u16, SeqCst);
+    fn fetch_or_versioned(&self, state: u8) -> bool {
+        self.fetch_update_versioned(|current| {
+            let new_state = current | state;
+            if current == new_state {
+                None
+            } else {
+                Some(new_state)
+            }
+        })
+        .is_some()
     }
 
     /// Non-versioned `fetch_and`.
@@ -248,6 +256,32 @@ impl AtomicState {
         self.inner
             .fetch_update(SeqCst, SeqCst, |val| {
                 f(val as u8).map(|new_val| new_val as u16)
+            })
+            .map(|prev| prev as u8)
+            .ok()
+    }
+
+    /// Versioned `fetch_update`.
+    #[inline(always)]
+    fn fetch_update_versioned<F>(&self, f: F) -> Option<u8>
+    where
+        F: Fn(u8) -> Option<u8>,
+    {
+        self.inner
+            .fetch_update(SeqCst, SeqCst, |val| {
+                let version = (val >> 8) as u8;
+                let current_state = val as u8;
+
+                if let Some(new_state) = f(current_state) {
+                    if current_state == new_state {
+                        return None;
+                    }
+
+                    let new_version = version.wrapping_add(1);
+                    Some(((new_version as u16) << 8) | (new_state as u16))
+                } else {
+                    None
+                }
             })
             .map(|prev| prev as u8)
             .ok()
@@ -328,7 +362,7 @@ impl ControlUnit {
     /// Operation is allowed to complete, but no new activation will be allowed.
     #[inline]
     pub fn lock(&self) {
-        self.set_state(CTRL_LOCKED);
+        self.state.fetch_or_versioned(CTRL_LOCKED);
         self.stop_sensor();
         trace_warn!(message = "Controller locked");
     }
@@ -413,7 +447,7 @@ impl ControlUnit {
                     }
                 },
                 Err(err) => {
-                    self.set_state(CTRL_LOCKED);
+                    self.state.fetch_or_versioned(CTRL_LOCKED);
                     trace_error!(message = "Panicked");
                     OpState::Panicked(Self::panic_message(err))
                 }
@@ -421,7 +455,7 @@ impl ControlUnit {
 
             // Dispatch final state
             let _ = tx.send(state);
-            self.clear_state(OP_ACTIVE);
+            self.state.fetch_and(!OP_ACTIVE);
         });
         Ok(rx)
     }
@@ -486,7 +520,7 @@ impl ControlUnit {
                                     // Behaviors are needed when the operation encounters difficulties.
                                     // These behaviors report back to supervisory bodies and resolvers.
                                     let _ = self.controller.perform(&self.ctx).await;
-                                    self.clear_state(OP_ACTIVE);
+                                    self.state.fetch_and(!OP_ACTIVE);
                                 }
                         }
                     }
@@ -497,14 +531,14 @@ impl ControlUnit {
 
             match result {
                 Ok(_) => {
-                    self.clear_state(CTRL_ACTIVE);
+                    self.state.fetch_and(!CTRL_ACTIVE);
                 }
                 Err(err) => {
                     // Atomic `compound`.
                     // Other threads might have loaded the old state already, but this is still safe because:
                     // - If state is read before, access is already blocked,
                     // - If read after, access will be blocked by then.
-                    let _ = self.state.fetch_update(|current| {
+                    let _ = self.state.fetch_update_versioned(|current| {
                         Some((current | CTRL_LOCKED) & !(OP_ACTIVE | CTRL_ACTIVE))
                     });
                     trace_error!(
@@ -520,16 +554,6 @@ impl ControlUnit {
         });
 
         Ok(())
-    }
-
-    #[inline(always)]
-    fn set_state(&self, state: u8) {
-        self.state.fetch_or(state);
-    }
-
-    #[inline(always)]
-    fn clear_state(&self, state: u8) {
-        self.state.fetch_and(!state);
     }
 
     fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
