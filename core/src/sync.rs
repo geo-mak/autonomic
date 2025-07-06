@@ -30,17 +30,18 @@ impl Signal {
 
     /// Returns a Future that waits for the next notification.
     /// It supports repeated calls.
+    // Only the last waiter is notified.
     #[inline(always)]
-    pub const fn notified(&self) -> Notification<'_> {
-        Notification { notify: self }
+    pub const fn notified(&self) -> NotifyLast<'_> {
+        NotifyLast { notify: self }
     }
 }
 
-pub struct Notification<'a> {
+pub struct NotifyLast<'a> {
     notify: &'a Signal,
 }
 
-impl Future for Notification<'_> {
+impl Future for NotifyLast<'_> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {

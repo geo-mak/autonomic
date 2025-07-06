@@ -38,12 +38,12 @@ pub trait ControllerService {
     fn lock(
         manager: Self::ServiceManager,
         id: Self::ControllerID,
-    ) -> impl Future<Output = Result<Self::AbortReturn, Self::ServiceError>> + Send;
+    ) -> impl Future<Output = Result<Self::LockReturn, Self::ServiceError>> + Send;
 
     fn unlock(
         manager: Self::ServiceManager,
         id: Self::ControllerID,
-    ) -> impl Future<Output = Result<Self::AbortReturn, Self::ServiceError>> + Send;
+    ) -> impl Future<Output = Result<Self::UnlockReturn, Self::ServiceError>> + Send;
 
     fn start_sensor(
         manager: Self::ServiceManager,

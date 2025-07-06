@@ -8,7 +8,9 @@ pub enum ControllerError {
     NotFound,
     NoResults,
     Active,
+    Performing,
     Locked,
+    Busy,
 }
 
 impl fmt::Display for ControllerError {
@@ -18,7 +20,9 @@ impl fmt::Display for ControllerError {
             ControllerError::NotFound => write!(f, "Not found"),
             ControllerError::NoResults => write!(f, "No results"),
             ControllerError::Active => write!(f, "Already active"),
+            ControllerError::Performing => write!(f, "Already performing"),
             ControllerError::Locked => write!(f, "Controller is locked"),
+            ControllerError::Busy => write!(f, "State changed during operation"),
         }
     }
 }

@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::fmt::{Debug, Display};
+use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering::SeqCst;
-use std::sync::atomic::{AtomicBool, AtomicU8};
 
 use futures_util::FutureExt;
 use tokio::sync::watch::{self, Receiver};
@@ -11,8 +11,10 @@ use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
 
-use autonomic_core::sync::{Notification, Signal};
-use autonomic_events::{trace_error, trace_info, trace_trace, trace_warn};
+use autonomic_core::sync::{NotifyLast, Signal};
+use autonomic_events::{trace_error, trace_info, trace_warn};
+
+use crate::errors::ControllerError;
 
 /// Exposes services and signals provided by the manager.
 pub struct ControlContext {
@@ -31,7 +33,7 @@ impl ControlContext {
     /// Note: Only the last waiter that acquires the future is notified.
     /// Previous pollers will not be notified.
     #[inline(always)]
-    pub fn abort(&self) -> Notification<'_> {
+    pub fn abort(&self) -> NotifyLast<'_> {
         self.sig_abort.notified()
     }
 }
@@ -58,48 +60,15 @@ pub trait Controller: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ControllerResult {
     Ok,
-    OkMsg(Cow<'static, str>),
-    Err,
-    ErrMsg(Cow<'static, str>),
+    Err(Cow<'static, str>),
     Abort,
-    Lock(Cow<'static, str>),
 }
 
 impl ControllerResult {
-    /// Returns `Self::OkMsg(value)` with static string literal.
-    #[inline]
-    pub const fn ok_msg(message: &'static str) -> Self {
-        ControllerResult::OkMsg(Cow::Borrowed(message))
-    }
-
     /// Returns `Self::ErrMsg(value)` with static string literal.
     #[inline]
-    pub const fn err_msg(message: &'static str) -> Self {
-        ControllerResult::ErrMsg(Cow::Borrowed(message))
-    }
-
-    /// Returns `Self::Lock(value)` with static string literal.
-    #[inline]
-    pub const fn lock(reason: &'static str) -> Self {
-        ControllerResult::Lock(Cow::Borrowed(reason))
-    }
-
-    /// Checks if result is `Ok`.
-    #[inline]
-    pub const fn is_ok(&self) -> bool {
-        matches!(self, ControllerResult::Ok | ControllerResult::OkMsg(_))
-    }
-
-    /// Checks if result is `Err`.
-    #[inline]
-    pub const fn is_err(&self) -> bool {
-        matches!(self, ControllerResult::Err | ControllerResult::ErrMsg(_))
-    }
-
-    /// Checks if result is `Lock`.
-    #[inline]
-    pub const fn is_lock(&self) -> bool {
-        matches!(self, ControllerResult::Lock(_))
+    pub const fn err(message: &'static str) -> Self {
+        ControllerResult::Err(Cow::Borrowed(message))
     }
 }
 
@@ -107,11 +76,8 @@ impl Display for ControllerResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ControllerResult::Ok => write!(f, "Ok"),
-            ControllerResult::OkMsg(val) => write!(f, "Ok: {val}"),
-            ControllerResult::Err => write!(f, "Error"),
-            ControllerResult::ErrMsg(err) => write!(f, "Error: {err}"),
+            ControllerResult::Err(err) => write!(f, "Error: {err}"),
             ControllerResult::Abort => write!(f, "Abort"),
-            ControllerResult::Lock(msg) => write!(f, "Lock: {msg}"),
         }
     }
 }
@@ -120,10 +86,9 @@ impl Display for ControllerResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum OpState {
     Started,
-    Ok(Option<Cow<'static, str>>),
+    Ok,
     Failed(Option<Cow<'static, str>>),
     Aborted,
-    Locked(Option<Cow<'static, str>>),
     Panicked(String),
 }
 
@@ -131,20 +96,31 @@ impl Display for OpState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OpState::Started => write!(f, "Started"),
-            OpState::Ok(result) => match result {
-                Some(val) => write!(f, "Ok: {val}"),
-                None => write!(f, "Ok"),
-            },
+            OpState::Ok => write!(f, "Ok"),
             OpState::Failed(result) => match result {
                 Some(val) => write!(f, "Failed: {val}"),
                 None => write!(f, "Failed"),
             },
             OpState::Aborted => write!(f, "Aborted"),
-            OpState::Locked(result) => match result {
-                Some(val) => write!(f, "Locked: {val}"),
-                None => write!(f, "Locked"),
-            },
             OpState::Panicked(val) => write!(f, "Panicked: {val}"),
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ControllerState {
+    Inactive = 0,
+    Active = 0b0000_0010,
+    Locked = 0b0000_0100,
+}
+
+impl fmt::Display for ControllerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ControllerState::Inactive => write!(f, "Inactive"),
+            ControllerState::Active => write!(f, "Active"),
+            ControllerState::Locked => write!(f, "Locked"),
         }
     }
 }
@@ -154,37 +130,23 @@ impl Display for OpState {
 pub struct ControllerInfo {
     id: Cow<'static, str>,
     description: Cow<'static, str>,
-    op_state: u8,
-    sensing: bool,
-    // TODO: Add last known state when the data API is ready
+    state: u8,
 }
 
 impl ControllerInfo {
-    pub const fn new(
-        id: Cow<'static, str>,
-        description: Cow<'static, str>,
-        op_state: u8,
-        sensing: bool,
-    ) -> Self {
+    pub const fn new(id: Cow<'static, str>, description: Cow<'static, str>, state: u8) -> Self {
         Self {
             id,
             description,
-            op_state,
-            sensing,
+            state,
         }
     }
 
-    pub const fn from_str(
-        id: &'static str,
-        description: &'static str,
-        op_state: u8,
-        sensing: bool,
-    ) -> Self {
+    pub const fn from_str(id: &'static str, description: &'static str, state: u8) -> Self {
         Self {
             id: Cow::Borrowed(id),
             description: Cow::Borrowed(description),
-            op_state,
-            sensing,
+            state,
         }
     }
 
@@ -199,32 +161,96 @@ impl ControllerInfo {
     }
 
     #[inline(always)]
-    pub const fn performing(&self) -> bool {
-        self.op_state == 1
-    }
-
-    #[inline(always)]
-    pub const fn locked(&self) -> bool {
-        self.op_state == 2
-    }
-
-    #[inline(always)]
-    pub const fn sensing(&self) -> bool {
-        self.sensing
+    pub fn state(&self) -> ControllerState {
+        match self.state {
+            s if s & CTRL_LOCKED != 0 => ControllerState::Locked,
+            s if s & CTRL_ACTIVE != 0 => ControllerState::Active,
+            _ => ControllerState::Inactive,
+        }
     }
 }
 
 impl Display for ControllerInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}, {}, {}, {}, {}",
-            self.id,
-            self.description,
-            self.performing(),
-            self.locked(),
-            self.sensing
-        )
+        write!(f, "{}, {}, {}", self.id, self.description, self.state())
+    }
+}
+
+const OP_ACTIVE: u8 = 0b0000_0001;
+const CTRL_ACTIVE: u8 = 0b0000_0010;
+const CTRL_LOCKED: u8 = 0b0000_0100;
+
+struct AtomicState {
+    inner: AtomicU16,
+}
+
+impl AtomicState {
+    const fn new(state: u8) -> Self {
+        Self {
+            inner: AtomicU16::new(state as u16),
+        }
+    }
+
+    /// Loads the raw state.
+    #[inline(always)]
+    fn load(&self) -> u8 {
+        self.inner.load(SeqCst) as u8
+    }
+
+    /// Loads version and state as (version, state).
+    #[inline(always)]
+    fn load_versioned(&self) -> (u8, u8) {
+        let val = self.inner.load(SeqCst);
+        ((val >> 8) as u8, val as u8)
+    }
+
+    /// Non-versioned `compare_exchange`.
+    #[inline(always)]
+    fn compare_exchange(&self, current: u8, new: u8) -> bool {
+        self.inner
+            .compare_exchange(current as u16, new as u16, SeqCst, SeqCst)
+            .is_ok()
+    }
+
+    /// Versioned `compare_exchange`.
+    #[inline(always)]
+    fn compare_exchange_versioned(
+        &self,
+        current_version: u8,
+        current_state: u8,
+        new_state: u8,
+    ) -> bool {
+        let current = ((current_version as u16) << 8) | (current_state as u16);
+        let new = (((current_version.wrapping_add(1)) as u16) << 8) | (new_state as u16);
+        self.inner
+            .compare_exchange(current, new, SeqCst, SeqCst)
+            .is_ok()
+    }
+
+    /// Non-versioned `fetch_or`.
+    #[inline(always)]
+    fn fetch_or(&self, state: u8) {
+        self.inner.fetch_or(state as u16, SeqCst);
+    }
+
+    /// Non-versioned `fetch_and`.
+    #[inline(always)]
+    fn fetch_and(&self, state: u8) {
+        self.inner.fetch_and(state as u16, SeqCst);
+    }
+
+    /// Non-versioned `fetch_update`.
+    #[inline(always)]
+    fn fetch_update<F>(&self, f: F) -> Option<u8>
+    where
+        F: Fn(u8) -> Option<u8>,
+    {
+        self.inner
+            .fetch_update(SeqCst, SeqCst, |val| {
+                f(val as u8).map(|new_val| new_val as u16)
+            })
+            .map(|prev| prev as u8)
+            .ok()
     }
 }
 
@@ -232,12 +258,7 @@ pub struct ControlUnit {
     controller: Box<dyn Controller>,
     ctx: ControlContext,
     sig_stop: Signal,
-    // State's value has the following semantics:
-    // 0: Inactive
-    // 1: Active
-    // 2: Locked
-    op_state: AtomicU8,
-    sensing: AtomicBool,
+    state: AtomicState,
 }
 
 impl ControlUnit {
@@ -246,8 +267,7 @@ impl ControlUnit {
             controller: Box::new(controller),
             ctx: ControlContext::new(),
             sig_stop: Signal::new(),
-            op_state: AtomicU8::new(0),
-            sensing: AtomicBool::new(false),
+            state: AtomicState::new(0),
         }
     }
 
@@ -265,49 +285,251 @@ impl ControlUnit {
         ControllerInfo::new(
             Cow::Borrowed(self.controller.id()),
             Cow::Borrowed(self.controller.description()),
-            self.op_state.load(SeqCst),
-            self.sensing.load(SeqCst),
+            self.state.load(),
         )
     }
 
     /// Checks if the control operation is currently performing.
     #[inline(always)]
     pub fn performing(&self) -> bool {
-        self.op_state.load(SeqCst) == 1
+        self.state.load() & OP_ACTIVE != 0
     }
 
     /// Checks if operation is currently locked.
     #[inline(always)]
     pub fn locked(&self) -> bool {
-        self.op_state.load(SeqCst) == 2
-    }
-
-    /// Locks the controller to prevent it from performing.
-    /// > **Note**: It doesn't abort the operation if it is currently active.
-    /// > Operation is allowed to complete, but no new activation will be allowed.
-    #[inline]
-    pub fn lock(&self) {
-        self.op_state.store(2, SeqCst);
-        trace_warn!(message = "Controller locked");
-    }
-
-    /// Unlocks the controller **only** if it is currently locked.
-    #[inline]
-    pub fn unlock(&self) {
-        // Unlocking is only allowed if the operation is currently locked.
-        if self.op_state.load(SeqCst) == 2 {
-            self.op_state.store(0, SeqCst);
-            trace_info!(message = "Controller unlocked");
-        }
+        self.state.load() & CTRL_LOCKED != 0
     }
 
     /// Checks if the sensor is currently active.
-    ///
-    /// # Returns
-    /// - `Ok(true)` - If sensing is active.
-    /// - `Ok(false)` - If the sensing is not active.
+    #[inline(always)]
     pub fn sensing(&self) -> bool {
-        self.sensing.load(SeqCst)
+        self.state.load() & CTRL_ACTIVE != 0
+    }
+
+    /// Unlocks the controller **only** if it is currently locked.
+    /// This method is no-op if the controller is currently unlocked.
+    #[inline]
+    pub fn unlock(&self) {
+        let (ver, current) = self.state.load_versioned();
+        if current & CTRL_LOCKED != 0 {
+            let unlocked = current & !CTRL_LOCKED;
+            if self
+                .state
+                .compare_exchange_versioned(ver, current, unlocked)
+            {
+                trace_info!(message = "Controller unlocked");
+            }
+        }
+    }
+
+    /// Locks the controller to prevent it from performing.
+    /// **Note**: It doesn't abort the operation if it is currently active.
+    /// Operation is allowed to complete, but no new activation will be allowed.
+    #[inline]
+    pub fn lock(&self) {
+        self.set_state(CTRL_LOCKED);
+        self.stop_sensor();
+        trace_warn!(message = "Controller locked");
+    }
+
+    /// Aborts the execution of the control operation, if it is currently performing.
+    /// **Note**: It sends abort signal, but it does not guarantee the aborting.
+    #[inline]
+    pub fn abort(&self) {
+        if self.performing() {
+            self.ctx.sig_abort.notify()
+        }
+    }
+
+    /// Deactivates the sensor of the controller if it is currently active.
+    #[inline]
+    pub fn stop_sensor(&self) {
+        if self.sensing() {
+            self.sig_stop.notify();
+        }
+    }
+
+    /// Starts the control operation and streams its execution states.
+    pub fn perform(&'static self) -> Result<Receiver<OpState>, ControllerError> {
+        // Single load for all checks.
+        let current = self.state.load();
+
+        // Initial CMP.
+        if (current & CTRL_LOCKED) != 0 {
+            trace_error!(message = "Controller locked");
+            return Err(ControllerError::Locked);
+        }
+
+        // Initial CMP.
+        if current & OP_ACTIVE != 0 {
+            trace_warn!(message = "Operation already performing");
+            return Err(ControllerError::Active);
+        }
+
+        let mask = CTRL_LOCKED | OP_ACTIVE;
+        let expected = current & mask;
+
+        // ABA is not a problem, if it is A right now, set it to B and go ahead.
+        if self
+            .state
+            .fetch_update(|val| {
+                if (val & mask) == expected {
+                    Some(val | OP_ACTIVE)
+                } else {
+                    None
+                }
+            })
+            .is_none()
+        {
+            // Sorry no loop, good luck later buddy.
+            trace_warn!(message = "Controller busy");
+            return Err(ControllerError::Busy);
+        }
+
+        // Safe to proceed.
+        trace_info!(message = "Started");
+
+        let (tx, rx) = watch::channel(OpState::Started);
+
+        tokio::spawn(async move {
+            let result = std::panic::AssertUnwindSafe(self.controller.perform(&self.ctx))
+                .catch_unwind()
+                .await;
+
+            let state = match result {
+                Ok(op_result) => match op_result {
+                    ControllerResult::Ok => {
+                        trace_info!(message = "Returned: Ok");
+                        OpState::Ok
+                    }
+                    ControllerResult::Err(err) => {
+                        trace_warn!(message = "Returned: Error");
+                        OpState::Failed(Some(err))
+                    }
+                    ControllerResult::Abort => {
+                        trace_warn!(message = "Returned: Abort");
+                        OpState::Aborted
+                    }
+                },
+                Err(err) => {
+                    self.set_state(CTRL_LOCKED);
+                    trace_error!(message = "Panicked");
+                    OpState::Panicked(Self::panic_message(err))
+                }
+            };
+
+            // Dispatch final state
+            let _ = tx.send(state);
+            self.clear_state(OP_ACTIVE);
+        });
+        Ok(rx)
+    }
+
+    /// Activates the sensor of the controller.
+    pub fn start_sensor(&'static self) -> Result<(), ControllerError> {
+        // Single load for all checks.
+        let current = self.state.load();
+
+        // Initial CMP.
+        if (current & CTRL_LOCKED) != 0 {
+            trace_error!(message = "Controller locked");
+            return Err(ControllerError::Locked);
+        }
+
+        // Initial CMP.
+        if current & CTRL_ACTIVE != 0 {
+            trace_warn!(message = "Sensor already active");
+            return Err(ControllerError::Active);
+        }
+
+        let mask = CTRL_LOCKED | CTRL_ACTIVE;
+        let expected = current & mask;
+
+        // ABA is not a problem, if it is A right now, set it to B and go ahead.
+        if self
+            .state
+            .fetch_update(|val| {
+                if (val & mask) == expected {
+                    Some(val | CTRL_ACTIVE)
+                } else {
+                    None
+                }
+            })
+            .is_none()
+        {
+            trace_warn!(message = "Controller busy");
+            return Err(ControllerError::Busy);
+        }
+
+        // Safe to proceed.
+        trace_info!(message = "Sensor activated");
+        tokio::spawn(async move {
+            let result = std::panic::AssertUnwindSafe(async {
+                loop {
+                    tokio::select! {
+                        // TODO: Notify can have a stalled token.
+                        _ = self.sig_stop.notified() => {
+                            break;
+                        }
+                        _ = self.controller.notified() => {
+                            // Note: If the current attempt to perform failed, the controller must
+                            // reevaluate the state again and decides if it is still need to perform again.
+                            let current = self.state.load();
+                            if current & OP_ACTIVE == 0 && self.state.compare_exchange(
+                                    current,
+                                    current | OP_ACTIVE,
+                                ) {
+                                    // TODO: Abort signal can have a stalled token.
+                                    // TODO: The returned result is useful for manual activation,
+                                    // which is a `backdoor` option, but it doesn't fit well here.
+                                    // Behaviors are needed when the operation encounters difficulties.
+                                    // These behaviors report back to supervisory bodies and resolvers.
+                                    let _ = self.controller.perform(&self.ctx).await;
+                                    self.clear_state(OP_ACTIVE);
+                                }
+                        }
+                    }
+                }
+            })
+            .catch_unwind()
+            .await;
+
+            match result {
+                Ok(_) => {
+                    self.clear_state(CTRL_ACTIVE);
+                }
+                Err(err) => {
+                    // Atomic `compound`.
+                    // Other threads might have loaded the old state already, but this is still safe because:
+                    // - If state is read before, access is already blocked,
+                    // - If read after, access will be blocked by then.
+                    let _ = self.state.fetch_update(|current| {
+                        Some((current | CTRL_LOCKED) & !(OP_ACTIVE | CTRL_ACTIVE))
+                    });
+                    trace_error!(
+                        message = format!(
+                            "Control operation has panicked: {}",
+                            Self::panic_message(err)
+                        )
+                    );
+                }
+            }
+
+            trace_info!(message = "Sensor Deactivated");
+        });
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn set_state(&self, state: u8) {
+        self.state.fetch_or(state);
+    }
+
+    #[inline(always)]
+    fn clear_state(&self, state: u8) {
+        self.state.fetch_and(!state);
     }
 
     fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
@@ -318,126 +540,5 @@ impl ControlUnit {
         } else {
             "Unknown panic payload".to_string()
         }
-    }
-
-    /// Starts the control operation and streams its execution states.
-    ///
-    /// # Safety
-    ///
-    /// Controller must be checked by the manager if it is currently locked or if its op is active.
-    pub fn perform(&'static self) -> Receiver<OpState> {
-        // Set active to prevent another activation while running.
-        self.op_state.store(1, SeqCst);
-        trace_info!(message = "Started");
-        let (tx, rx) = watch::channel(OpState::Started);
-        tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(self.controller.perform(&self.ctx))
-                .catch_unwind()
-                .await;
-            let state = match result {
-                Ok(op_result) => match op_result {
-                    ControllerResult::Ok => {
-                        trace_info!(message = "Returned: Ok");
-                        OpState::Ok(None)
-                    }
-                    ControllerResult::OkMsg(msg) => {
-                        trace_info!(message = "Returned: Ok");
-                        OpState::Ok(Some(msg))
-                    }
-                    ControllerResult::Err => {
-                        trace_warn!(message = "Returned: Error");
-                        OpState::Failed(None)
-                    }
-                    ControllerResult::ErrMsg(msg) => {
-                        trace_warn!(message = "Returned: Error");
-                        OpState::Failed(Some(msg))
-                    }
-                    ControllerResult::Abort => {
-                        trace_warn!(message = "Returned: Abort");
-                        OpState::Aborted
-                    }
-                    ControllerResult::Lock(msg) => {
-                        self.op_state.store(2, SeqCst);
-                        trace_warn!(message = "Returned: Lock");
-                        let _ = tx.send(OpState::Locked(Some(msg)));
-                        return; // <- Exit here.
-                    }
-                },
-                Err(err) => {
-                    self.op_state.store(2, SeqCst);
-                    trace_error!(message = "Panicked");
-                    let _ = tx.send(OpState::Panicked(Self::panic_message(err)));
-                    return; // <- Exit here.
-                }
-            };
-            // Dispatch final state
-            self.op_state.store(0, SeqCst);
-            let _ = tx.send(state);
-        });
-        rx
-    }
-
-    /// Aborts the execution of the control operation, if it is currently performing.
-    /// > **Note**: It sends abort signal, but it does not guarantee the aborting.
-    #[inline]
-    pub fn abort(&self) {
-        trace_trace!(message = "Abort requested");
-        self.ctx.sig_abort.notify()
-    }
-
-    /// Activates the sensor of the controller.
-    ///
-    /// # Safety
-    ///
-    /// Controller must be checked by the manager if it is currently locked or sensing.
-    pub fn start_sensor(&'static self) {
-        self.sensing.store(true, SeqCst);
-        trace_info!(message = "Sensor Activated");
-        tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(async {
-                loop {
-                    if self.op_state.load(SeqCst) == 2 {
-                        break;
-                    }
-                    tokio::select! {
-                        _ = self.sig_stop.notified() => {
-                            break;
-                        }
-                        _ = self.controller.notified() => {
-                            if self.op_state.load(SeqCst) == 0 {
-                                self.op_state.store(1, SeqCst);
-                                let _ = self.controller.perform(&self.ctx).await;
-                                self.op_state.store(0, SeqCst);
-                            }
-                        }
-                    }
-                }
-            })
-            .catch_unwind()
-            .await;
-
-            match result {
-                Ok(_) => {
-                    self.sensing.store(false, SeqCst);
-                    trace_info!(message = "Sensor Deactivated");
-                }
-                Err(err) => {
-                    self.sensing.store(false, SeqCst);
-                    self.op_state.store(2, SeqCst);
-                    trace_error!(
-                        message = format!(
-                            "Control operation has panicked: {}",
-                            Self::panic_message(err)
-                        )
-                    );
-                }
-            }
-        });
-    }
-
-    /// Deactivates the sensor of the controller if it is currently active.
-    pub fn stop_sensor(&self) {
-        trace_trace!(message = "Sensor deactivation requested");
-        self.sig_stop.notify();
     }
 }

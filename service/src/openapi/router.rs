@@ -71,7 +71,9 @@ impl IntoResponse for ServiceError {
             ControllerError::NoResults => StatusCode::NO_CONTENT,
             ControllerError::NotFound => StatusCode::NOT_FOUND,
             ControllerError::Active => StatusCode::CONFLICT,
+            ControllerError::Performing => StatusCode::CONFLICT,
             ControllerError::Locked => StatusCode::LOCKED,
+            ControllerError::Busy => StatusCode::CONFLICT,
         };
 
         let body = Json(self.0);
@@ -293,7 +295,6 @@ impl ControllerService for OpenAPIEndpoints {
 mod tests {
     use super::*;
 
-    use std::borrow::Cow;
     use std::string::String;
     use std::time::Duration;
 
@@ -302,7 +303,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
 
-    use autonomic_controllers::controller::OpState;
+    use autonomic_controllers::controller::{ControllerState, OpState};
     use autonomic_controllers::manager::ControllerManager;
 
     use autonomic_controllers::testkit::controller::TestController;
@@ -369,7 +370,7 @@ mod tests {
 
         assert_eq!(received_info.id(), controller_id);
         assert_eq!(received_info.description(), controller_id);
-        assert_eq!(received_info.performing(), false);
+        assert_eq!(received_info.state(), ControllerState::Inactive);
     }
 
     #[tokio::test]
@@ -411,9 +412,9 @@ mod tests {
             serde_json::from_slice(&body).expect("Failed to deserialize slice as vector");
 
         let mut expected = vec![
-            ControllerInfo::from_str(controller_1_id, controller_1_id, 0, false),
-            ControllerInfo::from_str(controller_2_id, controller_2_id, 0, false),
-            ControllerInfo::from_str(controller_3_id, controller_3_id, 0, false),
+            ControllerInfo::from_str(controller_1_id, controller_1_id, 0),
+            ControllerInfo::from_str(controller_2_id, controller_2_id, 0),
+            ControllerInfo::from_str(controller_3_id, controller_3_id, 0),
         ];
 
         controllers_info.sort_by(|a, b| a.id().cmp(b.id()));
@@ -540,7 +541,7 @@ mod tests {
 
         assert_eq!(
             received_state,
-            OpState::Ok(Some(Cow::Borrowed("Result"))),
+            OpState::Ok,
             "Unexpected event: {:?}",
             received_state
         );

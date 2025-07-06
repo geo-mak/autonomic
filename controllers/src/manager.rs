@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use tokio_stream::wrappers::WatchStream;
 
-use autonomic_events::{trace_error, trace_warn};
+use autonomic_events::trace_warn;
 use autonomic_serde::dynamic::{GenericSerializable, TypeRegistry};
 
 use crate::controller::{ControlUnit, Controller};
@@ -201,6 +201,7 @@ impl ControllerManager {
                 controller.unlock();
                 Ok(())
             }
+
             Err(e) => Err(e),
         }
     }
@@ -215,15 +216,7 @@ impl ControllerManager {
     pub fn perform(&'static self, id: &str) -> Result<WatchStream<OpState>, ControllerError> {
         match self.get(id) {
             Ok(controller) => {
-                if controller.locked() {
-                    trace_error!(message = "Controller locked");
-                    return Err(ControllerError::Locked);
-                }
-                if controller.performing() {
-                    trace_warn!(message = "Operation active");
-                    return Err(ControllerError::Active);
-                }
-                let stream = controller.perform();
+                let stream = controller.perform()?;
                 Ok(WatchStream::new(stream))
             }
             Err(e) => Err(e),
@@ -242,9 +235,7 @@ impl ControllerManager {
     pub fn abort(&self, id: &str) -> Result<(), ControllerError> {
         match self.get(id) {
             Ok(controller) => {
-                if controller.performing() {
-                    controller.abort();
-                }
+                controller.abort();
                 Ok(())
             }
             Err(e) => Err(e),
@@ -264,15 +255,7 @@ impl ControllerManager {
     pub fn start_sensor(&'static self, id: &str) -> Result<(), ControllerError> {
         match self.get(id) {
             Ok(controller) => {
-                if controller.locked() {
-                    trace_error!(message = "Controller locked");
-                    return Err(ControllerError::Locked);
-                }
-                if controller.sensing() {
-                    trace_warn!(message = "Sensor Active");
-                    return Err(ControllerError::Active);
-                }
-                controller.start_sensor();
+                controller.start_sensor()?;
                 Ok(())
             }
             Err(e) => Err(e),
@@ -313,11 +296,11 @@ impl ControllerManager {
         }
     }
 
-    /// Starts the sensors of all registerd controllers.
+    /// Starts the sensors of all registered controllers.
     /// **Note**: Errors are ignored.
     pub fn start(&'static self) {
         for controller in self.controllers.values() {
-            controller.start_sensor();
+            let _ = controller.start_sensor();
         }
     }
 

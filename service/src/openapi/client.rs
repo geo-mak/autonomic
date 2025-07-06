@@ -300,7 +300,7 @@ mod tests {
         let host = server.url();
 
         let controller_id = "123";
-        let operation_info = ControllerInfo::from_str("Test Operation", "123", 0, false);
+        let operation_info = ControllerInfo::from_str("Test Operation", "123", 0);
 
         // Response body as JSON
         let body = serde_json::to_string(&operation_info).unwrap();
@@ -330,8 +330,8 @@ mod tests {
         let host = server.url();
 
         let operations_info = vec![
-            ControllerInfo::from_str("Ctrl_1", "1", 0, false),
-            ControllerInfo::from_str("Ctrl_2", "2", 0, false),
+            ControllerInfo::from_str("Ctrl_1", "1", 0),
+            ControllerInfo::from_str("Ctrl_2", "2", 0),
         ];
 
         // Response body as JSON

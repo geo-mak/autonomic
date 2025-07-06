@@ -9,7 +9,6 @@ enum RunMode {
     Ok,
     Err,
     Panic,
-    Lock,
 }
 
 #[derive(Clone)]
@@ -48,24 +47,14 @@ impl TestController {
         }
     }
 
-    pub fn lock(id: &'static str, run_delay: Option<Duration>, notify_interval: u32) -> Self {
-        Self {
-            id,
-            run_delay,
-            mode: RunMode::Lock,
-            notify_interval,
-        }
-    }
-
     async fn run_mode_action(&self) -> ControllerResult {
         if let Some(run_delay) = self.run_delay {
             tokio::time::sleep(run_delay).await;
         }
         match self.mode {
-            RunMode::Ok => ControllerResult::ok_msg("Result"),
-            RunMode::Err => ControllerResult::err_msg("Expected Error"),
+            RunMode::Ok => ControllerResult::Ok,
+            RunMode::Err => ControllerResult::err("Expected Error"),
             RunMode::Panic => panic!("Unexpected Error"),
-            RunMode::Lock => ControllerResult::lock("Lock Controller"),
         }
     }
 }
@@ -106,7 +95,7 @@ mod tests {
         let controller = TestController::ok(CTRL_ID, None, 0);
         let ctx = ControlContext::new();
         let result = controller.perform(&ctx).await;
-        assert_eq!(result, ControllerResult::ok_msg("Result"));
+        assert_eq!(result, ControllerResult::Ok);
     }
 
     #[tokio::test]
@@ -115,7 +104,7 @@ mod tests {
         let controller = TestController::err(CTRL_ID, None, 0);
         let ctx = ControlContext::new();
         let result = controller.perform(&ctx).await;
-        assert_eq!(result, ControllerResult::err_msg("Expected Error"));
+        assert_eq!(result, ControllerResult::err("Expected Error"));
     }
 
     #[tokio::test]
