@@ -73,7 +73,7 @@ impl IntoResponse for ServiceError {
             ControllerError::Active => StatusCode::CONFLICT,
             ControllerError::Performing => StatusCode::CONFLICT,
             ControllerError::Locked => StatusCode::LOCKED,
-            ControllerError::Busy => StatusCode::CONFLICT,
+            ControllerError::AccessDenied => StatusCode::CONFLICT,
         };
 
         let body = Json(self.0);
@@ -554,7 +554,7 @@ mod tests {
 
         let controller_id = "test_controller";
 
-        // Duration is high to make sure abort is working as espected.
+        // Duration is high to make sure abort is working as expected.
         let controller = TestController::ok(controller_id, Some(Duration::from_secs(10)), 0);
 
         manager.submit(controller);

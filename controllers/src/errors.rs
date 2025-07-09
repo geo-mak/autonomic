@@ -10,7 +10,7 @@ pub enum ControllerError {
     Active,
     Performing,
     Locked,
-    Busy,
+    AccessDenied,
 }
 
 impl fmt::Display for ControllerError {
@@ -22,7 +22,7 @@ impl fmt::Display for ControllerError {
             ControllerError::Active => write!(f, "Already active"),
             ControllerError::Performing => write!(f, "Already performing"),
             ControllerError::Locked => write!(f, "Controller is locked"),
-            ControllerError::Busy => write!(f, "State changed during operation"),
+            ControllerError::AccessDenied => write!(f, "Access denied"),
         }
     }
 }

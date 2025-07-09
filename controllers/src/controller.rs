@@ -181,6 +181,7 @@ const CTRL_ACTIVE: u8 = 0b0000_0010;
 const CTRL_LOCKED: u8 = 0b0000_0100;
 
 struct AtomicState {
+    // [ 8 bits Version | 8 bits State ]
     inner: AtomicU16,
 }
 
@@ -212,16 +213,17 @@ impl AtomicState {
             .is_ok()
     }
 
-    /// Versioned `compare_exchange`.
+    /// Versioned `compare_exchange` that does NOT increment the version.
+    /// Compares both version and state, and if equal, sets the new state with the same version.
     #[inline(always)]
-    fn compare_exchange_versioned(
+    fn compare_versioned_exchange(
         &self,
         current_version: u8,
         current_state: u8,
         new_state: u8,
     ) -> bool {
         let current = ((current_version as u16) << 8) | (current_state as u16);
-        let new = (((current_version.wrapping_add(1)) as u16) << 8) | (new_state as u16);
+        let new = ((current_version as u16) << 8) | (new_state as u16);
         self.inner
             .compare_exchange(current, new, SeqCst, SeqCst)
             .is_ok()
@@ -341,47 +343,12 @@ impl ControlUnit {
         self.state.load() & CTRL_ACTIVE != 0
     }
 
-    /// Unlocks the controller **only** if it is currently locked.
-    /// This method is no-op if the controller is currently unlocked.
-    #[inline]
-    pub fn unlock(&self) {
-        let (ver, current) = self.state.load_versioned();
-        if current & CTRL_LOCKED != 0 {
-            let unlocked = current & !CTRL_LOCKED;
-            if self
-                .state
-                .compare_exchange_versioned(ver, current, unlocked)
-            {
-                trace_info!(message = "Controller unlocked");
-            }
-        }
-    }
-
-    /// Locks the controller to prevent it from performing.
-    /// **Note**: It doesn't abort the operation if it is currently active.
-    /// Operation is allowed to complete, but no new activation will be allowed.
-    #[inline]
-    pub fn lock(&self) {
-        self.state.fetch_or_versioned(CTRL_LOCKED);
-        self.stop_sensor();
-        trace_warn!(message = "Controller locked");
-    }
-
     /// Aborts the execution of the control operation, if it is currently performing.
     /// **Note**: It sends abort signal, but it does not guarantee the aborting.
     #[inline]
     pub fn abort(&self) {
-        if self.performing() {
-            self.ctx.sig_abort.notify()
-        }
-    }
-
-    /// Deactivates the sensor of the controller if it is currently active.
-    #[inline]
-    pub fn stop_sensor(&self) {
-        if self.sensing() {
-            self.sig_stop.notify();
-        }
+        // No-op without active waiter -> operation must be active AND waiting.
+        self.ctx.sig_abort.notify_waiter()
     }
 
     /// Starts the control operation and streams its execution states.
@@ -401,14 +368,13 @@ impl ControlUnit {
             return Err(ControllerError::Active);
         }
 
-        let mask = CTRL_LOCKED | OP_ACTIVE;
-        let expected = current & mask;
+        let cmp_state = CTRL_LOCKED | OP_ACTIVE;
 
         // ABA is not a problem, if it is A right now, set it to B and go ahead.
         if self
             .state
             .fetch_update(|val| {
-                if (val & mask) == expected {
+                if (val & cmp_state) == (current & cmp_state) {
                     Some(val | OP_ACTIVE)
                 } else {
                     None
@@ -416,9 +382,8 @@ impl ControlUnit {
             })
             .is_none()
         {
-            // Sorry no loop, good luck later buddy.
-            trace_warn!(message = "Controller busy");
-            return Err(ControllerError::Busy);
+            trace_warn!(message = "Access denied");
+            return Err(ControllerError::AccessDenied);
         }
 
         // Safe to proceed.
@@ -460,6 +425,57 @@ impl ControlUnit {
         Ok(rx)
     }
 
+    /// Locks the controller to prevent it from performing, if it is currently locked.
+    /// **Note**: It doesn't abort the operation if it is currently active.
+    /// Operation is allowed to complete, but no new activation will be allowed.
+    #[inline]
+    pub fn lock(&self) {
+        let ctrl_active = self
+            .state
+            .fetch_update_versioned(|current| {
+                let ctrl_locked = current | CTRL_LOCKED;
+                if current == ctrl_locked {
+                    None
+                } else {
+                    Some(ctrl_locked)
+                }
+            })
+            .map(|prev| prev & CTRL_ACTIVE != 0)
+            .unwrap_or(false);
+
+        if ctrl_active {
+            self.sig_stop.notify();
+        }
+
+        trace_warn!(message = "Controller locked");
+    }
+
+    /// Unlocks the controller **only** if it is currently locked.
+    /// Unlocking is versioned, if the lock-state is updated while trying to unlock, the request is no-op.
+    #[inline]
+    pub fn unlock(&self) {
+        let (ver, current) = self.state.load_versioned();
+        // Initial CMP.
+        if current & CTRL_LOCKED != 0 {
+            let unlocked = current & !CTRL_LOCKED;
+            // If still locked with the same version -> unlock.
+            if self
+                .state
+                .compare_versioned_exchange(ver, current, unlocked)
+            {
+                trace_info!(message = "Controller unlocked");
+            }
+        }
+    }
+
+    /// Deactivates the sensor of the controller, if it is currently active.
+    #[inline]
+    pub fn stop_sensor(&self) {
+        if self.sensing() {
+            self.sig_stop.notify();
+        }
+    }
+
     /// Activates the sensor of the controller.
     pub fn start_sensor(&'static self) -> Result<(), ControllerError> {
         // Single load for all checks.
@@ -477,14 +493,17 @@ impl ControlUnit {
             return Err(ControllerError::Active);
         }
 
-        let mask = CTRL_LOCKED | CTRL_ACTIVE;
-        let expected = current & mask;
+        // Clear any stale stop signals before the new activation attempt.
+        // Only after successful activation can new signals be considered valid.
+        self.sig_stop.clear();
+
+        let cmp_state = CTRL_LOCKED | CTRL_ACTIVE;
 
         // ABA is not a problem, if it is A right now, set it to B and go ahead.
         if self
             .state
             .fetch_update(|val| {
-                if (val & mask) == expected {
+                if (val & cmp_state) == (current & cmp_state) {
                     Some(val | CTRL_ACTIVE)
                 } else {
                     None
@@ -492,8 +511,8 @@ impl ControlUnit {
             })
             .is_none()
         {
-            trace_warn!(message = "Controller busy");
-            return Err(ControllerError::Busy);
+            trace_warn!(message = "Access denied");
+            return Err(ControllerError::AccessDenied);
         }
 
         // Safe to proceed.
@@ -502,19 +521,17 @@ impl ControlUnit {
             let result = std::panic::AssertUnwindSafe(async {
                 loop {
                     tokio::select! {
-                        // TODO: Notify can have a stalled token.
                         _ = self.sig_stop.notified() => {
                             break;
                         }
                         _ = self.controller.notified() => {
-                            // Note: If the current attempt to perform failed, the controller must
-                            // reevaluate the state again and decides if it is still need to perform again.
+                            // Note: If the current attempt to perform has failed, the controller must
+                            // reevaluate the state again and decide if performing is still required.
                             let current = self.state.load();
                             if current & OP_ACTIVE == 0 && self.state.compare_exchange(
                                     current,
                                     current | OP_ACTIVE,
                                 ) {
-                                    // TODO: Abort signal can have a stalled token.
                                     // TODO: The returned result is useful for manual activation,
                                     // which is a `backdoor` option, but it doesn't fit well here.
                                     // Behaviors are needed when the operation encounters difficulties.
@@ -530,14 +547,12 @@ impl ControlUnit {
             .await;
 
             match result {
+                // Shutdown request.
                 Ok(_) => {
                     self.state.fetch_and(!CTRL_ACTIVE);
                 }
+                // Panic case.
                 Err(err) => {
-                    // Atomic `compound`.
-                    // Other threads might have loaded the old state already, but this is still safe because:
-                    // - If state is read before, access is already blocked,
-                    // - If read after, access will be blocked by then.
                     let _ = self.state.fetch_update_versioned(|current| {
                         Some((current | CTRL_LOCKED) & !(OP_ACTIVE | CTRL_ACTIVE))
                     });
@@ -550,7 +565,7 @@ impl ControlUnit {
                 }
             }
 
-            trace_info!(message = "Sensor Deactivated");
+            trace_info!(message = "Sensor deactivated");
         });
 
         Ok(())
