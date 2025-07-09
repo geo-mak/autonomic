@@ -425,7 +425,7 @@ impl ControlUnit {
         Ok(rx)
     }
 
-    /// Locks the controller to prevent it from performing, if it is currently locked.
+    /// Locks the controller to prevent it from performing, if it is currently unlocked.
     /// **Note**: It doesn't abort the operation if it is currently active.
     /// Operation is allowed to complete, but no new activation will be allowed.
     #[inline]
