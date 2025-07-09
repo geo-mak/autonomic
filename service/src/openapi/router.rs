@@ -160,6 +160,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the operation is not found.
     /// - Status code `409` and `Json<ControllerError::Active>` as body: If the operation is already active.
     /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the operation is locked.
+    /// - Status code `409` and `Json<ControllerError::AccessDenied>` as body: If the internal state can't be determined.
     async fn perform(
         Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
@@ -253,6 +254,7 @@ impl ControllerService for OpenAPIEndpoints {
     /// - Status code `404` and `Json<ControllerError::NotFound>` as body: If the controller is not found.
     /// - Status code `409` and `Json<ControllerError::Active>` as body: If the sensor is already active.
     /// - Status code `423` and `Json<ControllerError::Locked>` as body: If the controller is locked.
+    /// - Status code `409` and `Json<ControllerError::AccessDenied>` as body: If the internal state can't be determined.
     async fn start_sensor(
         Extension(manager): Self::ServiceManager,
         Path(id): Self::ControllerID,
