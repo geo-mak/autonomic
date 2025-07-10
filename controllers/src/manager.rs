@@ -1,10 +1,8 @@
-use serde::Deserialize;
 use std::collections::HashMap;
 
 use tokio_stream::wrappers::WatchStream;
 
 use autonomic_events::trace_warn;
-use autonomic_serde::dynamic::{GenericSerializable, TypeRegistry};
 
 use crate::controller::{ControlUnit, Controller};
 use crate::controller::{ControllerInfo, OpState};
@@ -41,18 +39,6 @@ impl ControllerManager {
         } else {
             self.controllers.insert(id, ControlUnit::new(controller));
         }
-    }
-
-    /// Submits a controller to the manager and registers dynamic schema' type.
-    ///
-    /// # Panics
-    /// If a controller with the same ID already submitted in the controller.
-    pub fn with_dyn_schema<S>(&mut self, controller: impl Controller + 'static)
-    where
-        S: GenericSerializable + for<'de> Deserialize<'de> + 'static,
-    {
-        self.submit(controller);
-        TypeRegistry::register::<S>();
     }
 
     /// Retrieves an immutable reference to a controller by its id.

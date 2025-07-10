@@ -9,7 +9,6 @@ autonomic_events = { workspace = true, features = ["testkit"]}
 [dependencies]
 autonomic_core.workspace = true
 autonomic_events.workspace = true
-autonomic_serde = { workspace = true }
 
 lazy_static.workspace = true
 
